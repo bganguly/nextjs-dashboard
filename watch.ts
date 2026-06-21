@@ -1,13 +1,14 @@
-import { spawn } from "node:child_process";
-import { readFileSync, existsSync } from "node:fs";
+import { spawn, execFileSync } from "node:child_process";
+import { readFileSync, existsSync, appendFileSync } from "node:fs";
 import { resolve } from "node:path";
 import chokidar from "chokidar";
 import { notifyBlocked } from "./tests/notify";
 
 /**
  * Watcher: re-runs the Playwright suite whenever the backend or frontend
- * worktrees change, and emails an alert (notifyBlocked) when any single test
- * fails 3 times in a row.
+ * worktrees change. When any single test fails 3 times in a row it both
+ * (a) records the block in BLOCKED.md ([TESTING] prefix) and commits/pushes it,
+ * and (b) alerts via notifyBlocked (Telegram and/or email).
  *
  * Run with:  npx tsx watch.ts
  *
@@ -22,8 +23,11 @@ const WATCH_DIRS = (process.env.WATCH_DIRS ?? "../wt-backend,../wt-frontend")
   .filter((d) => existsSync(d));
 
 const RESULTS_FILE = resolve(process.cwd(), "test-results/results.json");
+const BLOCKED_FILE = resolve(process.cwd(), "BLOCKED.md");
 const FAIL_THRESHOLD = 3;
 const DEBOUNCE_MS = 800;
+// Auto-commit/push BLOCKED.md when a test becomes blocked (set to "0" to skip).
+const BLOCKED_PUSH = process.env.BLOCKED_PUSH !== "0";
 
 /** consecutive-failure count per fully-qualified test title */
 const failStreak = new Map<string, number>();
@@ -74,6 +78,51 @@ function collectSpecs(report: PwReport): Map<string, boolean> {
   };
   for (const s of report.suites ?? []) walk(s, "");
   return out;
+}
+
+/**
+ * Record a blocked test in BLOCKED.md (with the [TESTING] prefix) and, unless
+ * disabled, commit + push it. Best-effort: a git failure is logged but never
+ * crashes the watcher.
+ */
+function writeBlocked(title: string, streak: number, details: string): void {
+  const header = existsSync(BLOCKED_FILE)
+    ? ""
+    : "# [TESTING] Blocked tests\n\n" +
+      "Appended automatically by watch.ts when a test fails " +
+      `${FAIL_THRESHOLD} times in a row.\n`;
+  const entry =
+    `\n## [TESTING] ${title}\n\n` +
+    `- **Failed:** ${streak}x consecutively\n` +
+    `- **At:** ${new Date().toISOString()}\n` +
+    `- **Details:**\n\n` +
+    "```\n" +
+    `${details.trim()}\n` +
+    "```\n";
+  try {
+    appendFileSync(BLOCKED_FILE, header + entry);
+    console.log(`[watch] wrote BLOCKED.md entry for: ${title}`);
+  } catch (err) {
+    console.error("[watch] failed to write BLOCKED.md:", err);
+    return;
+  }
+
+  if (!BLOCKED_PUSH) return;
+  try {
+    const git = (...args: string[]) =>
+      execFileSync("git", args, { cwd: process.cwd(), stdio: "pipe" });
+    git("add", "BLOCKED.md");
+    git(
+      "commit",
+      "-m",
+      `[TESTING] blocked: ${title} failed ${streak}x`,
+    );
+    git("push", "origin", "HEAD");
+    console.log("[watch] committed + pushed BLOCKED.md");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[watch] could not commit/push BLOCKED.md: ${msg}`);
+  }
 }
 
 function runTests(): Promise<void> {
@@ -154,12 +203,17 @@ async function processResults(exitCode: number, stderrTail: string): Promise<voi
       const details =
         `Exit code: ${exitCode}\n` +
         (stderrTail ? `\nstderr (tail):\n${stderrTail}` : "");
+
+      // 1) Persist the block to BLOCKED.md (and commit/push).
+      writeBlocked(title, streak, details);
+
+      // 2) Alert over every configured channel (Telegram and/or email).
       try {
         const sent = await notifyBlocked(title, streak, details);
         console.log(
           sent
-            ? `[watch] alerted via email: ${title}`
-            : `[watch] alert skipped (notify not configured): ${title}`,
+            ? `[watch] alerted (telegram/email): ${title}`
+            : `[watch] alert skipped (no channel configured): ${title}`,
         );
       } catch (err) {
         console.error(`[watch] failed to send alert for ${title}:`, err);
