@@ -49,16 +49,33 @@ loadDotEnv();
 
 const NOTIFY_EMAIL = process.env.NOTIFY_EMAIL ?? "";
 const NOTIFY_PASS = process.env.NOTIFY_PASS ?? "";
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN ?? "";
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID ?? "";
 
-const PLACEHOLDERS = new Set(["you@gmail.com", "your-app-password"]);
+// Values that mean "not filled in yet" — treated as unconfigured.
+const PLACEHOLDERS = new Set([
+  "you@gmail.com",
+  "your-app-password",
+  "PASTE_TOKEN_HERE",
+  "123456:your-bot-token",
+  "your-chat-id",
+]);
 
+function filled(v: string): boolean {
+  return v.length > 0 && !PLACEHOLDERS.has(v);
+}
+
+export function emailConfigured(): boolean {
+  return filled(NOTIFY_EMAIL) && filled(NOTIFY_PASS);
+}
+
+export function telegramConfigured(): boolean {
+  return filled(TELEGRAM_TOKEN) && filled(TELEGRAM_CHAT_ID);
+}
+
+/** True if at least one notification channel is configured. */
 export function notifyConfigured(): boolean {
-  return (
-    NOTIFY_EMAIL.length > 0 &&
-    NOTIFY_PASS.length > 0 &&
-    !PLACEHOLDERS.has(NOTIFY_EMAIL) &&
-    !PLACEHOLDERS.has(NOTIFY_PASS)
-  );
+  return emailConfigured() || telegramConfigured();
 }
 
 let transporter: nodemailer.Transporter | null = null;
@@ -73,32 +90,72 @@ function getTransporter(): nodemailer.Transporter {
   return transporter;
 }
 
-export interface NotifyOptions {
-  subject: string;
-  body: string;
-}
-
-/**
- * Send a notification email. Returns true if sent, false if skipped because
- * credentials are not configured (so the watcher can keep running locally
- * with placeholder .env values without crashing).
- */
-export async function notify({ subject, body }: NotifyOptions): Promise<boolean> {
-  if (!notifyConfigured()) {
-    console.warn(
-      "[notify] NOTIFY_EMAIL/NOTIFY_PASS not configured (still placeholders?) — skipping email.\n" +
-        `[notify] would have sent: ${subject}`,
-    );
-    return false;
-  }
+async function sendEmail(subject: string, body: string): Promise<void> {
   await getTransporter().sendMail({
     from: NOTIFY_EMAIL,
     to: NOTIFY_EMAIL,
     subject,
     text: body,
   });
-  console.log(`[notify] sent email: ${subject}`);
-  return true;
+}
+
+async function sendTelegram(subject: string, body: string): Promise<void> {
+  const res = await fetch(
+    `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: TELEGRAM_CHAT_ID,
+        text: `${subject}\n\n${body}`,
+        disable_web_page_preview: true,
+      }),
+    },
+  );
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Telegram sendMessage failed: ${res.status} ${detail}`);
+  }
+}
+
+export interface NotifyOptions {
+  subject: string;
+  body: string;
+}
+
+/**
+ * Send a notification to every configured channel (email and/or Telegram).
+ * Returns true if at least one channel delivered, false if none are
+ * configured (so the watcher keeps running locally with placeholder .env
+ * values without crashing). A failure in one channel does not prevent the
+ * others from being attempted.
+ */
+export async function notify({ subject, body }: NotifyOptions): Promise<boolean> {
+  if (!notifyConfigured()) {
+    console.warn(
+      "[notify] no channel configured (NOTIFY_EMAIL/NOTIFY_PASS or " +
+        "TELEGRAM_TOKEN/TELEGRAM_CHAT_ID still placeholders?) — skipping.\n" +
+        `[notify] would have sent: ${subject}`,
+    );
+    return false;
+  }
+
+  const channels: Array<[string, () => Promise<void>]> = [];
+  if (emailConfigured()) channels.push(["email", () => sendEmail(subject, body)]);
+  if (telegramConfigured())
+    channels.push(["telegram", () => sendTelegram(subject, body)]);
+
+  let anySent = false;
+  for (const [name, send] of channels) {
+    try {
+      await send();
+      anySent = true;
+      console.log(`[notify] sent via ${name}: ${subject}`);
+    } catch (err) {
+      console.error(`[notify] ${name} delivery failed:`, err);
+    }
+  }
+  return anySent;
 }
 
 /**
