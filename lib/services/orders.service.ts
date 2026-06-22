@@ -7,11 +7,31 @@ import type {
   OrderItemDTO,
   OrderListInput,
   OrderListResult,
+  OrderSortField,
   OrderStatus,
+  SortDir,
 } from "@/lib/types";
 
-const DEFAULT_LIMIT = 20;
-const MAX_LIMIT = 100;
+const DEFAULT_PAGE_SIZE = 20;
+const MAX_PAGE_SIZE = 100;
+const DEFAULT_SORT: OrderSortField = "placedAt";
+const DEFAULT_DIR: SortDir = "desc";
+
+/** Maps each allowed sort field to a Prisma orderBy clause for the given direction. */
+const ORDER_BY: Record<OrderSortField, (dir: SortDir) => Prisma.OrderOrderByWithRelationInput> = {
+  placedAt: (dir) => ({ placedAt: dir }),
+  total: (dir) => ({ total: dir }),
+  status: (dir) => ({ status: dir }),
+  customer: (dir) => ({ customer: { lastName: dir } }),
+};
+
+function normalizeSort(sort: string | null | undefined): OrderSortField {
+  return sort != null && sort in ORDER_BY ? (sort as OrderSortField) : DEFAULT_SORT;
+}
+
+function normalizeDir(dir: string | null | undefined): SortDir {
+  return dir === "asc" || dir === "desc" ? dir : DEFAULT_DIR;
+}
 
 const orderInclude = {
   customer: { select: { id: true, email: true, firstName: true, lastName: true } },
@@ -45,7 +65,13 @@ function toOrderDTO(o: OrderWithRelations): OrderDTO {
 }
 
 export async function listOrders(input: OrderListInput): Promise<OrderListResult> {
-  const limit = Math.min(Math.max(input.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
+  const page = Math.max(Math.trunc(input.page ?? 1) || 1, 1);
+  const pageSize = Math.min(
+    Math.max(Math.trunc(input.pageSize ?? DEFAULT_PAGE_SIZE) || DEFAULT_PAGE_SIZE, 1),
+    MAX_PAGE_SIZE,
+  );
+  const sort = normalizeSort(input.sort);
+  const dir = normalizeDir(input.dir);
   const q = input.q?.trim();
 
   const where: Prisma.OrderWhereInput = q
@@ -59,20 +85,23 @@ export async function listOrders(input: OrderListInput): Promise<OrderListResult
       }
     : {};
 
+  // Tie-break on id so pages are stable when the sort key has duplicates.
+  const orderBy: Prisma.OrderOrderByWithRelationInput[] = [ORDER_BY[sort](dir), { id: dir }];
+
   try {
-    const rows = await prisma.order.findMany({
-      where,
-      take: limit + 1,
-      ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
-      orderBy: { placedAt: "desc" },
-      include: orderInclude,
-    });
+    const [rows, total] = await Promise.all([
+      prisma.order.findMany({
+        where,
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        orderBy,
+        include: orderInclude,
+      }),
+      prisma.order.count({ where }),
+    ]);
 
-    const hasMore = rows.length > limit;
-    const data = (hasMore ? rows.slice(0, limit) : rows).map(toOrderDTO);
-    const nextCursor = hasMore ? data[data.length - 1].id : null;
-
-    return { data, nextCursor, hasMore };
+    const totalPages = total === 0 ? 0 : Math.ceil(total / pageSize);
+    return { data: rows.map(toOrderDTO), page, pageSize, total, totalPages };
   } catch (err) {
     mapDbError(err, "listOrders");
   }

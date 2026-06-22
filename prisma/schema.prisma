@@ -8,15 +8,15 @@ datasource db {
 }
 
 model Category {
-  id          Int        @id @default(autoincrement())
-  name        String     @unique @db.VarChar(100)
-  slug        String     @unique @db.VarChar(100)
-  parentId    Int?
-  parent      Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id])
-  children    Category[] @relation("CategoryHierarchy")
-  products    Product[]
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  id        Int        @id @default(autoincrement())
+  name      String     @unique @db.VarChar(100)
+  slug      String     @unique @db.VarChar(100)
+  parentId  Int?
+  parent    Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children  Category[] @relation("CategoryHierarchy")
+  products  Product[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
 
   @@map("categories")
 }
@@ -47,6 +47,7 @@ model Customer {
 
   @@index([regionId])
   @@index([email])
+  @@index([lastName]) // sort orders by customer (customer.lastName)
   @@map("customers")
 }
 
@@ -88,6 +89,7 @@ model Order {
   @@index([regionId])
   @@index([status])
   @@index([placedAt])
+  @@index([total]) // sort-by-total at 4M rows
   @@map("orders")
 }
 

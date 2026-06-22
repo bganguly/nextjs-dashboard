@@ -2,17 +2,19 @@ import { NextRequest, NextResponse } from "next/server";
 import { createOrder, isAppError, listOrders } from "@/lib/services";
 import type { CreateOrderInput } from "@/lib/types";
 
-// GET /api/orders?cursor=<id>&limit=<n>&q=<search>
+// GET /api/orders?q=<search>&page=<n>&pageSize=<n>&sort=<field>&dir=<asc|desc>
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl;
-  const cursor = searchParams.get("cursor");
-  const limit = searchParams.get("limit");
+  const page = searchParams.get("page");
+  const pageSize = searchParams.get("pageSize");
 
   try {
     const result = await listOrders({
-      cursor: cursor ? Number(cursor) : null,
-      limit: limit ? Number(limit) : undefined,
+      page: page ? Number(page) : undefined,
+      pageSize: pageSize ? Number(pageSize) : undefined,
       q: searchParams.get("q"),
+      sort: searchParams.get("sort"),
+      dir: searchParams.get("dir"),
     });
     return NextResponse.json(result);
   } catch (err) {

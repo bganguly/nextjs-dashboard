@@ -56,16 +56,30 @@ export interface OrderDTO {
   items: OrderItemDTO[];
 }
 
+export type SortDir = "asc" | "desc";
+
+/** Fields the orders list may be sorted by (server-side only). */
+export type OrderSortField = "placedAt" | "total" | "status" | "customer";
+
 export interface OrderListInput {
-  cursor?: number | null;
-  limit?: number;
+  /** 1-based page number. Defaults to 1. */
+  page?: number;
+  /** Rows per page. Defaults to 20, capped at 100. */
+  pageSize?: number;
+  /** Free-text search over customer name/email and order notes. */
   q?: string | null;
+  /** Sort field; validated server-side, defaults to "placedAt". */
+  sort?: string | null;
+  /** Sort direction; validated server-side, defaults to "desc". */
+  dir?: string | null;
 }
 
 export interface OrderListResult {
   data: OrderDTO[];
-  nextCursor: number | null;
-  hasMore: boolean;
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
 }
 
 export interface CreateOrderItemInput {
