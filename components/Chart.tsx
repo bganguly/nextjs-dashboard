@@ -20,18 +20,21 @@ export interface AggregateBucket {
   [series: string]: string | number;
 }
 
-/** One category's revenue within a date, as sent by the backend. */
+/** Per-category metrics within a date, as sent by the backend. */
 interface RawCategory {
-  category?: string;
-  name?: string;
+  totalOrders?: number;
   totalRevenue?: number;
-  revenue?: number;
+  totalItems?: number;
+  avgOrderValue?: number;
 }
 
-/** Raw backend row: a date plus its per-category revenue breakdown. */
+/**
+ * Raw backend row: a date plus its per-category breakdown, keyed by category
+ * name (an object, not an array): `{ "Category 1": { totalRevenue, ... } }`.
+ */
 interface RawAggregate {
   date: string;
-  categories: RawCategory[];
+  categories: Record<string, RawCategory>;
 }
 
 interface AggregatesResponse {
@@ -39,17 +42,13 @@ interface AggregatesResponse {
 }
 
 /**
- * Flatten `{ date, categories: [{ category, totalRevenue }] }` into a single
- * stacked-bar bucket `{ date, [categoryName]: totalRevenue }`.
+ * Flatten `{ date, categories: { [name]: { totalRevenue, ... } } }` into a
+ * single stacked-bar bucket `{ date, [categoryName]: totalRevenue }`.
  */
 function flattenAggregate(entry: RawAggregate): AggregateBucket {
   const bucket: AggregateBucket = { date: entry.date };
-  for (const c of entry.categories ?? []) {
-    const name = c.category ?? c.name;
-    if (name == null) continue;
-    const value = Number(c.totalRevenue ?? c.revenue ?? 0);
-    const prev = typeof bucket[name] === "number" ? (bucket[name] as number) : 0;
-    bucket[name] = prev + value;
+  for (const [category, c] of Object.entries(entry.categories ?? {})) {
+    bucket[category] = c.totalRevenue ?? 0; // stacked series = revenue per category
   }
   return bucket;
 }
