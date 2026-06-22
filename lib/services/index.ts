@@ -6,6 +6,7 @@ export * from "./orders.service";
 export * from "./aggregates.service";
 export * from "./customers.service";
 export * from "./products.service";
+export * from "./regions.service";
 export * from "./search.service";
 export * from "./stream.service";
 

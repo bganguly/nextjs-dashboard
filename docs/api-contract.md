@@ -187,6 +187,25 @@ day has ≤ N categories.
 
 ---
 
+## GET /api/regions
+
+The full region list for populating the region filter dropdown (independent of
+any current filter/page). Ordered by name.
+
+### 200 response
+
+```json
+[
+  { "code": "R001", "name": "Andes" },
+  { "code": "R014", "name": "Baltics" }
+]
+```
+
+A bare array of `{ code, name }`. The frontend falls back to page-discovered
+codes if this endpoint is unavailable.
+
+---
+
 ## GET /api/stream
 
 Server-Sent Events backed by Postgres `LISTEN/NOTIFY` on channel

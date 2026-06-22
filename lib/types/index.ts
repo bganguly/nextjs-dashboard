@@ -27,6 +27,12 @@ export interface RegionSummary {
   name: string;
 }
 
+/** Lightweight region entry for filter dropdowns (GET /api/regions). */
+export interface RegionOption {
+  code: string;
+  name: string;
+}
+
 export interface ProductSummary {
   id: number;
   sku: string;
