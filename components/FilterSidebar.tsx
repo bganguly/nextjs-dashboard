@@ -38,6 +38,25 @@ export const EMPTY_FILTERS: OrderFilters = {
   totalMax: "",
 };
 
+/**
+ * Append the active filters to a query string using the backend's parameter
+ * names (status/regionCode as comma-separated lists; placedAt `from`/`to`;
+ * `minTotal`/`maxTotal`). Shared by the orders table and the aggregates chart so
+ * both narrow to the same set. Empty filters add nothing.
+ */
+export function appendFilterParams(
+  params: URLSearchParams,
+  f?: OrderFilters,
+): void {
+  if (!f) return;
+  if (f.status.length) params.set("status", f.status.join(","));
+  if (f.regionCodes.length) params.set("regionCode", f.regionCodes.join(","));
+  if (f.from) params.set("from", f.from);
+  if (f.to) params.set("to", f.to);
+  if (f.totalMin) params.set("minTotal", f.totalMin);
+  if (f.totalMax) params.set("maxTotal", f.totalMax);
+}
+
 export function isEmptyFilters(f: OrderFilters): boolean {
   return (
     f.status.length === 0 &&
@@ -114,10 +133,16 @@ function MultiSelectFilter({
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return options;
-    return options.filter(
-      (o) =>
-        o.label.toLowerCase().includes(q) || o.value.toLowerCase().includes(q),
+    const matches = q
+      ? options.filter(
+          (o) =>
+            o.label.toLowerCase().includes(q) ||
+            o.value.toLowerCase().includes(q),
+        )
+      : options;
+    // Alpha-sort by displayed label (case-insensitive) for predictable order.
+    return [...matches].sort((a, b) =>
+      a.label.localeCompare(b.label, undefined, { sensitivity: "base" }),
     );
   }, [options, query]);
 

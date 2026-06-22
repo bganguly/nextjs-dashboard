@@ -13,6 +13,7 @@ import {
   YAxis,
 } from "recharts";
 import { useIsDark } from "@/hooks/useIsDark";
+import { appendFilterParams, type OrderFilters } from "@/components/FilterSidebar";
 
 /** One x-axis bucket. `date` is the label; every other numeric key is a stack series. */
 export interface AggregateBucket {
@@ -41,9 +42,15 @@ interface AggregatesResponse {
   data: RawAggregate[];
 }
 
-const DEFAULT_TOP_N = 5;
-const OTHER_KEY = "Other";
+const DEFAULT_TOP_N = 8;
+const OTHER_KEY = "Others";
 const OTHER_COLOR = "#94a3b8"; // slate-400
+
+/** Whether a category name is a roll-up bucket ("Other"/"Others"), case-insensitive. */
+function isOtherCategory(name: string): boolean {
+  const n = name.trim().toLowerCase();
+  return n === "other" || n === "others";
+}
 
 export interface CategoryTotal {
   category: string;
@@ -82,8 +89,8 @@ function buildBucket(
   if (withOther) bucket[OTHER_KEY] = 0;
   for (const [category, c] of Object.entries(entry.categories ?? {})) {
     const revenue = c.totalRevenue ?? 0;
-    // Non-top categories (including any backend-provided "Other") merge into
-    // the single rolled-up "Other" series.
+    // Non-top categories (including any backend-provided "Other"/"Others") merge
+    // into the single rolled-up "Others" series.
     const key = top.has(category) ? category : withOther ? OTHER_KEY : null;
     if (key === null) continue;
     bucket[key] = (bucket[key] as number) + revenue;
@@ -96,7 +103,6 @@ const currencyFmt = new Intl.NumberFormat("en-US", {
   currency: "USD",
   maximumFractionDigits: 0,
 });
-const numberFmt = new Intl.NumberFormat("en-US");
 
 /**
  * Abbreviate large revenue values for the Y axis: 25000 → "25k", 1_200_000 →
@@ -116,8 +122,11 @@ interface ChartProps {
   refreshSignal?: number;
   /** Endpoint that returns stacked aggregates for a date range. */
   endpoint?: string;
-  /** How many categories to stack individually; the rest roll into "Other". */
+  /** How many categories to stack individually; the rest roll into "Others". */
   topN?: number;
+  /** Sidebar filters; applied to the aggregates request so the chart and totals
+   *  recompute for the same filtered set as the orders table. */
+  filters?: OrderFilters;
 }
 
 // Stable palette for stacked series. Cycled if there are more series than colors.
@@ -149,6 +158,7 @@ export default function Chart({
   refreshSignal = 0,
   endpoint = "/api/aggregates",
   topN = DEFAULT_TOP_N,
+  filters,
 }: ChartProps) {
   const [rawData, setRawData] = useState<RawAggregate[]>([]);
   const [range, setRange] = useState(defaultRange);
@@ -168,10 +178,15 @@ export default function Chart({
       setLoading(true);
       setError(null);
       try {
-        const params = new URLSearchParams({ from, to });
-        // Forward-compatible: honoured if the backend adds it; otherwise we
-        // roll up to the top N client-side below.
+        // A date filter, if set, overrides the brush/default range; the other
+        // filters (status, region, total) narrow the same set as the table.
+        const params = new URLSearchParams({
+          from: filters?.from || from,
+          to: filters?.to || to,
+        });
         params.set("topCategories", String(topN));
+        // Sets status/regionCode/minTotal/maxTotal (and from/to if filtered).
+        appendFilterParams(params, filters);
         const res = await fetch(`${endpoint}?${params}`, {
           signal: controller.signal,
         });
@@ -185,7 +200,7 @@ export default function Chart({
         setLoading(false);
       }
     },
-    [endpoint, topN],
+    [endpoint, topN, filters],
   );
 
   // Initial load + refetch whenever the SSE refresh signal changes.
@@ -223,11 +238,12 @@ export default function Chart({
   );
 
   // Stack only the top N *real* categories; everything else (including any
-  // backend-provided "Other" pseudo-category) rolls into a single "Other".
+  // backend-provided "Other"/"Others" pseudo-category) rolls into a single
+  // "Others" series.
   const topCategories = useMemo(
     () =>
       categoryTotals
-        .filter((c) => c.category !== OTHER_KEY)
+        .filter((c) => !isOtherCategory(c.category))
         .slice(0, topN)
         .map((c) => c.category),
     [categoryTotals, topN],
@@ -252,6 +268,23 @@ export default function Chart({
   }, [topCategories]);
   const colorFor = (key: string) =>
     key === OTHER_KEY ? OTHER_COLOR : (colorByCategory.get(key) ?? OTHER_COLOR);
+
+  // Revenue per displayed series (top categories + a single rolled-up "Others"),
+  // sorted desc — mirrors exactly what the chart stacks. Drives the totals row.
+  const displayTotals = useMemo(() => {
+    const topSet = new Set(topCategories);
+    const rows = topCategories.map((cat) => ({
+      category: cat,
+      revenue: categoryTotals.find((c) => c.category === cat)?.revenue ?? 0,
+    }));
+    if (withOther) {
+      const othersRevenue = categoryTotals
+        .filter((c) => !topSet.has(c.category))
+        .reduce((sum, c) => sum + c.revenue, 0);
+      rows.push({ category: OTHER_KEY, revenue: othersRevenue });
+    }
+    return rows.sort((a, b) => b.revenue - a.revenue);
+  }, [categoryTotals, topCategories, withOther]);
 
   // Dragging the Brush selects a date window; debounce then refetch that window.
   const handleBrushChange = useCallback(
@@ -359,48 +392,36 @@ export default function Chart({
           </BarChart>
         </ResponsiveContainer>
 
-        {/* Category totals for the current range, sorted by revenue desc. */}
-        <div data-testid="category-totals" className="mt-4 overflow-x-auto">
-          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">
+        {/* Category totals for the current range as a single wrapping row,
+            sorted by revenue desc, mirroring the chart's series + "Others". */}
+        <div className="mt-4">
+          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500">
             Category totals
           </p>
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-gray-200 text-left text-gray-500 dark:border-gray-800">
-                <th className="py-1 pr-3 font-medium">Category</th>
-                <th className="py-1 pr-3 text-right font-medium">Revenue</th>
-                <th className="py-1 text-right font-medium">Orders</th>
-              </tr>
-            </thead>
-            <tbody>
-              {categoryTotals.map((ct) => (
-                <tr
-                  key={ct.category}
-                  className="border-b border-gray-100 last:border-0 dark:border-gray-800/60"
-                >
-                  <td className="py-1 pr-3">
-                    <span className="inline-flex items-center gap-1.5">
-                      <span
-                        aria-hidden
-                        className="h-2 w-2 rounded-sm"
-                        style={{
-                          backgroundColor:
-                            colorByCategory.get(ct.category) ?? OTHER_COLOR,
-                        }}
-                      />
-                      {ct.category}
-                    </span>
-                  </td>
-                  <td className="py-1 pr-3 text-right tabular-nums">
-                    {currencyFmt.format(ct.revenue)}
-                  </td>
-                  <td className="py-1 text-right tabular-nums">
-                    {numberFmt.format(ct.orders)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div
+            data-testid="category-totals"
+            className="flex flex-wrap items-center gap-x-4 gap-y-2"
+          >
+            {displayTotals.map((ct) => (
+              <span
+                key={ct.category}
+                className="inline-flex items-center gap-1.5 text-xs"
+                title={currencyFmt.format(ct.revenue)}
+              >
+                <span
+                  aria-hidden
+                  className="h-2.5 w-2.5 shrink-0 rounded-sm"
+                  style={{ backgroundColor: colorFor(ct.category) }}
+                />
+                <span className="text-gray-600 dark:text-gray-300">
+                  {ct.category}
+                </span>
+                <span className="font-medium tabular-nums text-gray-900 dark:text-gray-100">
+                  ${compactNumber(ct.revenue)}
+                </span>
+              </span>
+            ))}
+          </div>
         </div>
         </>
       )}

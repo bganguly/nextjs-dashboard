@@ -83,7 +83,7 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-zinc-50 font-sans dark:bg-black">
-      <main className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <main className="mx-auto w-full max-w-[1600px] px-4 py-8 lg:px-6">
         <header className="mb-6 flex items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
@@ -104,7 +104,7 @@ export default function Dashboard() {
           <div className="min-w-0 flex-1">
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
               <div className="space-y-6 lg:col-span-2">
-                <Chart refreshSignal={refreshSignal} />
+                <Chart refreshSignal={refreshSignal} filters={filters} />
                 <SearchTable
                   refreshSignal={refreshSignal}
                   filters={filters}

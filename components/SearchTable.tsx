@@ -1,7 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { OrderFilters } from "@/components/FilterSidebar";
+import {
+  appendFilterParams,
+  type OrderFilters,
+} from "@/components/FilterSidebar";
 
 /** A result row. Columns are derived from the keys present in the rows. */
 export type SearchRow = Record<string, unknown>;
@@ -32,26 +35,62 @@ function cn(...classes: (string | false | undefined)[]): string {
   return classes.filter(Boolean).join(" ");
 }
 
-/**
- * Append sidebar filters to the orders query. Param names mirror the backend
- * schema (status, regionCode, placedAt from/to, total min/max). These are
- * harmless until the backend (wt1) honours them — unknown params are ignored.
- */
-function appendFilterParams(params: URLSearchParams, f?: OrderFilters): void {
-  if (!f) return;
-  for (const s of f.status) params.append("status", s);
-  for (const c of f.regionCodes) params.append("regionCode", c);
-  if (f.from) params.set("from", f.from);
-  if (f.to) params.set("to", f.to);
-  if (f.totalMin) params.set("totalMin", f.totalMin);
-  if (f.totalMax) params.set("totalMax", f.totalMax);
-}
-
 function formatCell(value: unknown): string {
   if (value == null) return "";
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
 }
+
+const moneyFmt = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+});
+
+function renderCustomer(row: SearchRow): string {
+  const c = row.customer as
+    | { firstName?: string; lastName?: string; email?: string }
+    | undefined;
+  if (!c) return "";
+  const name = [c.firstName, c.lastName].filter(Boolean).join(" ").trim();
+  return name || c.email || "";
+}
+
+function renderItems(row: SearchRow): string {
+  const items = row.items;
+  return Array.isArray(items) ? String(items.length) : "";
+}
+
+function renderTotal(row: SearchRow): string {
+  return typeof row.total === "number"
+    ? moneyFmt.format(row.total)
+    : formatCell(row.total);
+}
+
+function renderDate(row: SearchRow): string {
+  const v = row.placedAt;
+  if (typeof v !== "string") return formatCell(v);
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? v : d.toLocaleDateString();
+}
+
+interface ColumnDef {
+  key: string;
+  label: string;
+  numeric?: boolean;
+  /** Sort key the backend accepts (placedAt | total | status | customer).
+   *  Omitted for columns the backend can't sort (id, items, notes). */
+  sortKey?: string;
+  render: (row: SearchRow) => string;
+}
+
+const COLUMNS: ColumnDef[] = [
+  { key: "id", label: "ID", render: (r) => formatCell(r.id) },
+  { key: "customer", label: "Customer", sortKey: "customer", render: renderCustomer },
+  { key: "items", label: "Items", numeric: true, render: renderItems },
+  { key: "total", label: "Total", numeric: true, sortKey: "total", render: renderTotal },
+  { key: "notes", label: "Notes", render: (r) => formatCell(r.notes) },
+  { key: "placedAt", label: "Placed", sortKey: "placedAt", render: renderDate },
+];
 
 type PageItem = number | "left-ellipsis" | "right-ellipsis";
 
@@ -180,11 +219,11 @@ export default function SearchTable({
   }, []);
 
   const toggleSort = useCallback(
-    (col: string) => {
-      if (sort === col) {
+    (sortKey: string) => {
+      if (sort === sortKey) {
         setDir((d) => (d === "asc" ? "desc" : "asc"));
       } else {
-        setSort(col);
+        setSort(sortKey);
         setDir("asc");
       }
       setPage(1);
@@ -199,20 +238,6 @@ export default function SearchTable({
     },
     [totalPages],
   );
-
-  // Status and region are controlled exclusively from the filter sidebar, so
-  // they're not rendered as table columns (the fields still come back in the
-  // response — we just skip them here).
-  const columns = useMemo(() => {
-    const HIDDEN_COLUMNS = new Set(["status", "region"]);
-    const cols: string[] = [];
-    for (const row of rows) {
-      for (const key of Object.keys(row)) {
-        if (!cols.includes(key) && !HIDDEN_COLUMNS.has(key)) cols.push(key);
-      }
-    }
-    return cols;
-  }, [rows]);
 
   const pageItems = useMemo(
     () => getPageItems(page, totalPages),
@@ -253,13 +278,18 @@ export default function SearchTable({
           <table className="w-full border-collapse text-sm">
             <thead>
               <tr className="border-b border-gray-200 text-left dark:border-gray-800">
-                {columns.map((col) => {
-                  const isSorted = sort === col;
+                {COLUMNS.map((col) => {
+                  const isSorted = col.sortKey ? sort === col.sortKey : false;
+                  const sortable = !!col.sortKey;
                   return (
                     <th
-                      key={col}
-                      data-testid={`sort-${col}`}
-                      onClick={() => toggleSort(col)}
+                      key={col.key}
+                      {...(sortable
+                        ? { "data-testid": `sort-${col.sortKey}` }
+                        : {})}
+                      onClick={
+                        sortable ? () => toggleSort(col.sortKey!) : undefined
+                      }
                       aria-sort={
                         isSorted
                           ? dir === "asc"
@@ -267,19 +297,28 @@ export default function SearchTable({
                             : "descending"
                           : "none"
                       }
-                      className="cursor-pointer select-none px-3 py-2 font-medium text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                      className={cn(
+                        "px-3 py-2 font-medium text-gray-500 dark:text-gray-400",
+                        sortable &&
+                          "cursor-pointer select-none hover:text-gray-700 dark:hover:text-gray-200",
+                        col.numeric && "text-right",
+                      )}
                     >
                       <span className="inline-flex items-center gap-1">
-                        {col}
-                        <span
-                          aria-hidden
-                          className={cn(
-                            "text-xs",
-                            isSorted ? "text-indigo-500" : "text-transparent",
-                          )}
-                        >
-                          {isSorted ? (dir === "asc" ? "▲" : "▼") : "▲"}
-                        </span>
+                        {col.label}
+                        {sortable && (
+                          <span
+                            aria-hidden
+                            className={cn(
+                              "text-xs",
+                              isSorted
+                                ? "text-indigo-500"
+                                : "text-transparent",
+                            )}
+                          >
+                            {isSorted ? (dir === "asc" ? "▲" : "▼") : "▲"}
+                          </span>
+                        )}
                       </span>
                     </th>
                   );
@@ -294,9 +333,15 @@ export default function SearchTable({
                   data-id={row.id as string | number | undefined}
                   className="border-b border-gray-100 hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-800/50"
                 >
-                  {columns.map((col) => (
-                    <td key={col} className="px-3 py-2 align-top">
-                      {formatCell(row[col])}
+                  {COLUMNS.map((col) => (
+                    <td
+                      key={col.key}
+                      className={cn(
+                        "px-3 py-2 align-top",
+                        col.numeric && "text-right tabular-nums",
+                      )}
+                    >
+                      {col.render(row)}
                     </td>
                   ))}
                 </tr>
