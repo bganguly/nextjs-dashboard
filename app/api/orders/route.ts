@@ -2,19 +2,30 @@ import { NextRequest, NextResponse } from "next/server";
 import { createOrder, isAppError, listOrders } from "@/lib/services";
 import type { CreateOrderInput } from "@/lib/types";
 
-// GET /api/orders?q=<search>&page=<n>&pageSize=<n>&sort=<field>&dir=<asc|desc>
+// GET /api/orders?q=&page=&pageSize=&sort=&dir=
+//   filters: &status=&regionCode=&from=&to=&minTotal=&maxTotal=  (status/regionCode accept comma lists)
+//   &facets=1 to include sidebar facet counts
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl;
-  const page = searchParams.get("page");
-  const pageSize = searchParams.get("pageSize");
+  const num = (name: string) => {
+    const v = searchParams.get(name);
+    return v != null && v !== "" ? Number(v) : undefined;
+  };
 
   try {
     const result = await listOrders({
-      page: page ? Number(page) : undefined,
-      pageSize: pageSize ? Number(pageSize) : undefined,
+      page: num("page"),
+      pageSize: num("pageSize"),
       q: searchParams.get("q"),
       sort: searchParams.get("sort"),
       dir: searchParams.get("dir"),
+      status: searchParams.get("status"),
+      regionCode: searchParams.get("regionCode"),
+      from: searchParams.get("from"),
+      to: searchParams.get("to"),
+      minTotal: num("minTotal") ?? null,
+      maxTotal: num("maxTotal") ?? null,
+      facets: searchParams.get("facets") === "1" || searchParams.get("facets") === "true",
     });
     return NextResponse.json(result);
   } catch (err) {

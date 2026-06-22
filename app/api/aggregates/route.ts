@@ -1,15 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDailyAggregates, isAppError } from "@/lib/services";
 
-// GET /api/aggregates?from=YYYY-MM-DD&to=YYYY-MM-DD&regionCode=<code>
+// GET /api/aggregates?from=YYYY-MM-DD&to=YYYY-MM-DD&regionCode=<code>&topCategories=<N>
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl;
+  const topCategories = searchParams.get("topCategories");
 
   try {
     const data = await getDailyAggregates({
       from: searchParams.get("from") ?? "",
       to: searchParams.get("to") ?? "",
       regionCode: searchParams.get("regionCode"),
+      topCategories: topCategories ? Number(topCategories) : null,
     });
     return NextResponse.json({ data });
   } catch (err) {

@@ -2,10 +2,19 @@ import { prisma } from "@/lib/prisma";
 import { AppError, mapDbError } from "@/lib/errors";
 import type { AggregateQueryInput, CategoryAggregate, DailyAggregate } from "@/lib/types";
 
+const DEFAULT_TOP_CATEGORIES = 5;
+const OTHER_BUCKET = "Other";
+
 export async function getDailyAggregates(input: AggregateQueryInput): Promise<DailyAggregate[]> {
   if (!input.from || !input.to) {
     throw new AppError("BAD_REQUEST", "from and to dates are required (YYYY-MM-DD)");
   }
+
+  // 0 / null / undefined -> default; negative is clamped to the default too.
+  const topN =
+    input.topCategories != null && input.topCategories > 0
+      ? Math.trunc(input.topCategories)
+      : DEFAULT_TOP_CATEGORIES;
 
   const fromDate = new Date(input.from);
   const toDate = new Date(input.to);
@@ -49,8 +58,38 @@ export async function getDailyAggregates(input: AggregateQueryInput): Promise<Da
       entry.totals.totalItems += cat.totalItems;
     }
 
-    return Array.from(byDate.values());
+    return Array.from(byDate.values()).map((day) => capToTopCategories(day, topN));
   } catch (err) {
     mapDbError(err, "getDailyAggregates");
   }
+}
+
+/**
+ * Keep only the top-N categories by revenue for a day; sum the remainder into a
+ * single "Other" bucket so the chart stays readable. Day-level `totals` are
+ * unaffected.
+ */
+function capToTopCategories(day: DailyAggregate, topN: number): DailyAggregate {
+  const entries = Object.entries(day.categories).sort(
+    ([, a], [, b]) => b.totalRevenue - a.totalRevenue,
+  );
+  if (entries.length <= topN) return day;
+
+  const top = entries.slice(0, topN);
+  const rest = entries.slice(topN);
+
+  const other = rest.reduce<CategoryAggregate>(
+    (acc, [, c]) => ({
+      totalOrders: acc.totalOrders + c.totalOrders,
+      totalRevenue: acc.totalRevenue + c.totalRevenue,
+      totalItems: acc.totalItems + c.totalItems,
+      avgOrderValue: 0, // recomputed below
+    }),
+    { totalOrders: 0, totalRevenue: 0, totalItems: 0, avgOrderValue: 0 },
+  );
+  other.avgOrderValue = other.totalOrders > 0 ? other.totalRevenue / other.totalOrders : 0;
+
+  const categories: Record<string, CategoryAggregate> = Object.fromEntries(top);
+  categories[OTHER_BUCKET] = other;
+  return { ...day, categories };
 }

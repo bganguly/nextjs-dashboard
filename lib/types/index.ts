@@ -61,7 +61,22 @@ export type SortDir = "asc" | "desc";
 /** Fields the orders list may be sorted by (server-side only). */
 export type OrderSortField = "placedAt" | "total" | "status" | "customer";
 
-export interface OrderListInput {
+/** Filters that narrow the orders list. All combine (AND) with `q`, sort, paging. */
+export interface OrderFilterInput {
+  /** OrderStatus value(s); accepts a comma-separated list. */
+  status?: string | null;
+  /** Region code(s); accepts a comma-separated list. */
+  regionCode?: string | null;
+  /** Inclusive placedAt lower bound (ISO date or datetime). */
+  from?: string | null;
+  /** Inclusive placedAt upper bound (date-only is treated as end-of-day). */
+  to?: string | null;
+  /** Inclusive total lower/upper bounds. */
+  minTotal?: number | null;
+  maxTotal?: number | null;
+}
+
+export interface OrderListInput extends OrderFilterInput {
   /** 1-based page number. Defaults to 1. */
   page?: number;
   /** Rows per page. Defaults to 20, capped at 100. */
@@ -72,14 +87,35 @@ export interface OrderListInput {
   sort?: string | null;
   /** Sort direction; validated server-side, defaults to "desc". */
   dir?: string | null;
+  /** When true, also compute sidebar facet counts for the current filter. */
+  facets?: boolean;
+}
+
+export interface FacetCount {
+  value: string;
+  count: number;
+}
+
+export interface OrderFacets {
+  /** Counts per order status for the current filter. */
+  status: FacetCount[];
+  /** Counts per region code for the current filter. */
+  region: FacetCount[];
+  /** True when the facet counts were capped (broad result set). */
+  approximate: boolean;
 }
 
 export interface OrderListResult {
   data: OrderDTO[];
   page: number;
   pageSize: number;
+  /** Matching rows. Capped (and `approximate: true`) for broad searches. */
   total: number;
   totalPages: number;
+  /** True when `total`/`totalPages` are a capped estimate (broad result set). */
+  approximate: boolean;
+  /** Present only when `facets` was requested. */
+  facets?: OrderFacets;
 }
 
 export interface CreateOrderItemInput {
@@ -103,6 +139,8 @@ export interface AggregateQueryInput {
   from: string;
   to: string;
   regionCode?: string | null;
+  /** Keep only the top-N categories by revenue per day; rest roll into "Other". */
+  topCategories?: number | null;
 }
 
 export interface CategoryAggregate {

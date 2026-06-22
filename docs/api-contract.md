@@ -63,21 +63,29 @@ side only**; the client never re-sorts.
 
 ### Query parameters
 
-| param      | type   | default    | notes                                                        |
-| ---------- | ------ | ---------- | ------------------------------------------------------------ |
-| `page`     | number | `1`        | 1-based. Values `< 1` clamp to 1.                            |
-| `pageSize` | number | `20`       | Clamped to `1..100`.                                         |
-| `q`        | string | —          | Case-insensitive search over customer first/last name, customer email, and order notes. |
-| `sort`     | string | `placedAt` | One of `placedAt \| total \| status \| customer`. Unknown values fall back to `placedAt`. |
-| `dir`      | string | `desc`     | `asc \| desc`. Unknown values fall back to `desc`.          |
+| param        | type   | default    | notes                                                                                     |
+| ------------ | ------ | ---------- | ----------------------------------------------------------------------------------------- |
+| `page`       | number | `1`        | 1-based. Values `< 1` clamp to 1.                                                          |
+| `pageSize`   | number | `20`       | Clamped to `1..100`.                                                                       |
+| `q`          | string | —          | Case-insensitive search over customer first/last name, customer email, and order notes.   |
+| `sort`       | string | `placedAt` | One of `placedAt \| total \| status \| customer`. Unknown values fall back to `placedAt`. |
+| `dir`        | string | `desc`     | `asc \| desc`. Unknown values fall back to `desc`.                                         |
+| `status`     | string | —          | Filter by `OrderStatus`. Comma-separated list ok. Unknown values are ignored.             |
+| `regionCode` | string | —          | Filter by region code. Comma-separated list ok.                                           |
+| `from`       | string | —          | Inclusive `placedAt` lower bound (`YYYY-MM-DD` or ISO datetime).                           |
+| `to`         | string | —          | Inclusive `placedAt` upper bound. Date-only is treated as end-of-day.                      |
+| `minTotal`   | number | —          | Inclusive lower bound on `total`.                                                         |
+| `maxTotal`   | number | —          | Inclusive upper bound on `total`.                                                         |
+| `facets`     | `1`    | —          | When `1`/`true`, include `facets` in the response.                                        |
 
 `sort=customer` orders by `customer.lastName`. All sorts add `id` as a
-tie-breaker so pages are stable. Search combines with sort and pagination.
+tie-breaker so pages are stable. Filters combine (AND) with `q`, sort, and
+pagination. Malformed `from`/`to`/`minTotal`/`maxTotal` return `400 BAD_REQUEST`.
 
 Frontend call shape:
 
 ```
-GET /api/orders?q=&page=1&pageSize=20&sort=placedAt&dir=desc
+GET /api/orders?q=&page=1&pageSize=20&sort=placedAt&dir=desc&status=&regionCode=&from=&to=&minTotal=&maxTotal=
 ```
 
 ### 200 response
@@ -88,13 +96,24 @@ GET /api/orders?q=&page=1&pageSize=20&sort=placedAt&dir=desc
   "page": 1,
   "pageSize": 20,
   "total": 4000000,
-  "totalPages": 200000
+  "totalPages": 200000,
+  "approximate": false,
+  "facets": {
+    "status": [ { "value": "DELIVERED", "count": 812345 } ],
+    "region": [ { "value": "R001", "count": 41234 } ],
+    "approximate": true
+  }
 }
 ```
 
-- `total` — count of rows matching `q` (the full filtered set, not the page).
+- `total` — count of rows matching the filters/`q` (the full set, not the page).
+- `approximate` — `true` when the result is broad and `total`/`totalPages` are a
+  capped estimate (capped at `10000`). The page data is always exact.
 - `totalPages` — `ceil(total / pageSize)`; `0` when `total` is `0`.
 - `data.length` ≤ `pageSize`. An out-of-range `page` returns an empty `data`.
+- `facets` — present only when `facets=1`. `status`/`region` are
+  `{ value, count }[]` (region `value` is the region code), each sorted by count
+  descending. `facets.approximate` is `true` when the facet counts were capped.
 
 ## POST /api/orders
 
@@ -130,13 +149,20 @@ Daily totals grouped by category over a date range.
 
 ### Query parameters
 
-| param        | type   | required | notes                          |
-| ------------ | ------ | -------- | ------------------------------ |
-| `from`       | string | yes      | `YYYY-MM-DD` (inclusive)       |
-| `to`         | string | yes      | `YYYY-MM-DD` (inclusive)       |
-| `regionCode` | string | no       | Filter to a single region code |
+| param           | type   | required | notes                                                  |
+| --------------- | ------ | -------- | ------------------------------------------------------ |
+| `from`          | string | yes      | `YYYY-MM-DD` (inclusive)                                |
+| `to`            | string | yes      | `YYYY-MM-DD` (inclusive)                                |
+| `regionCode`    | string | no       | Filter to a single region code                         |
+| `topCategories` | number | no       | Keep top-N categories/day by revenue (default `5`); the rest roll into an `"Other"` bucket. |
 
 Missing/invalid dates return `400 BAD_REQUEST`.
+
+`topCategories` caps each day's `categories` map: only the N highest-revenue
+categories are kept by name, and a single `"Other"` entry holds the summed
+`totalOrders`/`totalRevenue`/`totalItems` (with `avgOrderValue` recomputed) of
+the remainder. Day-level `totals` are unchanged. No `"Other"` key is added when a
+day has ≤ N categories.
 
 ### 200 response
 
