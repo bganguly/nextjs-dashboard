@@ -45,7 +45,7 @@ SELECT 1 + floor(random() * :customers)::int,
        round((random() * 500 + 10)::numeric, 2),
        'USD',
        'order ' || g,
-       now() - (random() * 30 || ' days')::interval,
+       now() - (random() * 30) * interval '1 day',
        now()
 FROM generate_series(1, :orders) g;
 
