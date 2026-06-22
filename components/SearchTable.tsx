@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { OrderFilters } from "@/components/FilterSidebar";
 
 /** A result row. Columns are derived from the keys present in the rows. */
 export type SearchRow = Record<string, unknown>;
@@ -19,12 +20,31 @@ interface SearchTableProps {
   refreshSignal?: number;
   endpoint?: string;
   pageSize?: number;
+  /** Active order filters from the sidebar. Sent as query params. */
+  filters?: OrderFilters;
+  /** Called with each fetched page of rows (used to discover region codes). */
+  onRows?: (rows: SearchRow[]) => void;
 }
 
 const SEARCH_DEBOUNCE_MS = 300;
 
 function cn(...classes: (string | false | undefined)[]): string {
   return classes.filter(Boolean).join(" ");
+}
+
+/**
+ * Append sidebar filters to the orders query. Param names mirror the backend
+ * schema (status, regionCode, placedAt from/to, total min/max). These are
+ * harmless until the backend (wt1) honours them — unknown params are ignored.
+ */
+function appendFilterParams(params: URLSearchParams, f?: OrderFilters): void {
+  if (!f) return;
+  for (const s of f.status) params.append("status", s);
+  for (const c of f.regionCodes) params.append("regionCode", c);
+  if (f.from) params.set("from", f.from);
+  if (f.to) params.set("to", f.to);
+  if (f.totalMin) params.set("totalMin", f.totalMin);
+  if (f.totalMax) params.set("totalMax", f.totalMax);
 }
 
 function formatCell(value: unknown): string {
@@ -57,6 +77,8 @@ export default function SearchTable({
   refreshSignal = 0,
   endpoint = "/api/orders",
   pageSize = 20,
+  filters,
+  onRows,
 }: SearchTableProps) {
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -71,8 +93,20 @@ export default function SearchTable({
 
   const abortRef = useRef<AbortController | null>(null);
 
+  // Latest onRows without making it a fetch dependency.
+  const onRowsRef = useRef(onRows);
+  useEffect(() => {
+    onRowsRef.current = onRows;
+  });
+
   const fetchPage = useCallback(
-    async (q: string, p: number, sortCol: string, sortDir: SortDir) => {
+    async (
+      q: string,
+      p: number,
+      sortCol: string,
+      sortDir: SortDir,
+      f: OrderFilters | undefined,
+    ) => {
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
@@ -89,14 +123,17 @@ export default function SearchTable({
           params.set("sort", sortCol);
           params.set("dir", sortDir);
         }
+        appendFilterParams(params, f);
         const res = await fetch(`${endpoint}?${params}`, {
           signal: controller.signal,
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json: SearchResponse = await res.json();
-        setRows(Array.isArray(json.data) ? json.data : []);
+        const data = Array.isArray(json.data) ? json.data : [];
+        setRows(data);
         setTotalPages(Math.max(1, json.totalPages ?? 1));
         setTotal(json.total ?? 0);
+        onRowsRef.current?.(data);
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
         setError((err as Error).message);
@@ -119,13 +156,24 @@ export default function SearchTable({
     return () => clearTimeout(timer);
   }, [query]);
 
-  // Single source of truth for fetching: reacts to query, page, sort, and the
-  // SSE refresh signal. Sorting and paging are server-side (no client sorting).
+  // Single source of truth for fetching: reacts to query, page, sort, filters,
+  // and the SSE refresh signal. Sorting/paging/filtering are all server-side.
+  // When filters change we snap back to page 1 first (skipping a redundant
+  // fetch at the old page).
+  const lastFiltersKey = useRef<string>(JSON.stringify(filters ?? {}));
   useEffect(() => {
+    const key = JSON.stringify(filters ?? {});
+    if (key !== lastFiltersKey.current) {
+      lastFiltersKey.current = key;
+      if (page !== 1) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setPage(1);
+        return; // re-runs with page 1
+      }
+    }
     // Kicks off an async fetch (which toggles loading state); intentional.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    fetchPage(debouncedQuery, page, sort, dir);
-  }, [debouncedQuery, page, sort, dir, refreshSignal, fetchPage]);
+    fetchPage(debouncedQuery, page, sort, dir, filters);
+  }, [debouncedQuery, page, sort, dir, filters, refreshSignal, fetchPage]);
 
   useEffect(() => {
     return () => abortRef.current?.abort();

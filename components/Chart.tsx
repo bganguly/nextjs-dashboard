@@ -41,23 +41,70 @@ interface AggregatesResponse {
   data: RawAggregate[];
 }
 
+const DEFAULT_TOP_N = 5;
+const OTHER_KEY = "Other";
+const OTHER_COLOR = "#94a3b8"; // slate-400
+
+export interface CategoryTotal {
+  category: string;
+  revenue: number;
+  orders: number;
+}
+
+/** Sum revenue and order count per category across the range, sorted desc. */
+function computeCategoryTotals(data: RawAggregate[]): CategoryTotal[] {
+  const map = new Map<string, { revenue: number; orders: number }>();
+  for (const entry of data) {
+    for (const [category, c] of Object.entries(entry.categories ?? {})) {
+      const prev = map.get(category) ?? { revenue: 0, orders: 0 };
+      prev.revenue += c.totalRevenue ?? 0;
+      prev.orders += c.totalOrders ?? 0;
+      map.set(category, prev);
+    }
+  }
+  return [...map.entries()]
+    .map(([category, v]) => ({ category, revenue: v.revenue, orders: v.orders }))
+    .sort((a, b) => b.revenue - a.revenue);
+}
+
 /**
- * Flatten `{ date, categories: { [name]: { totalRevenue, ... } } }` into a
- * single stacked-bar bucket `{ date, [categoryName]: totalRevenue }`.
+ * Build one stacked bucket per date, keeping only `topCategories` as their own
+ * revenue series and rolling every other category into a single "Other" series.
  */
-function flattenAggregate(entry: RawAggregate): AggregateBucket {
+function buildBucket(
+  entry: RawAggregate,
+  topCategories: string[],
+  withOther: boolean,
+): AggregateBucket {
+  const top = new Set(topCategories);
   const bucket: AggregateBucket = { date: entry.date };
+  for (const cat of topCategories) bucket[cat] = 0;
+  if (withOther) bucket[OTHER_KEY] = 0;
   for (const [category, c] of Object.entries(entry.categories ?? {})) {
-    bucket[category] = c.totalRevenue ?? 0; // stacked series = revenue per category
+    const revenue = c.totalRevenue ?? 0;
+    // Non-top categories (including any backend-provided "Other") merge into
+    // the single rolled-up "Other" series.
+    const key = top.has(category) ? category : withOther ? OTHER_KEY : null;
+    if (key === null) continue;
+    bucket[key] = (bucket[key] as number) + revenue;
   }
   return bucket;
 }
+
+const currencyFmt = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  maximumFractionDigits: 0,
+});
+const numberFmt = new Intl.NumberFormat("en-US");
 
 interface ChartProps {
   /** Bumped by the SSE LiveFeed to force a refetch of the current range. */
   refreshSignal?: number;
   /** Endpoint that returns stacked aggregates for a date range. */
   endpoint?: string;
+  /** How many categories to stack individually; the rest roll into "Other". */
+  topN?: number;
 }
 
 // Stable palette for stacked series. Cycled if there are more series than colors.
@@ -88,8 +135,9 @@ function defaultRange(): { from: string; to: string } {
 export default function Chart({
   refreshSignal = 0,
   endpoint = "/api/aggregates",
+  topN = DEFAULT_TOP_N,
 }: ChartProps) {
-  const [buckets, setBuckets] = useState<AggregateBucket[]>([]);
+  const [rawData, setRawData] = useState<RawAggregate[]>([]);
   const [range, setRange] = useState(defaultRange);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -108,13 +156,15 @@ export default function Chart({
       setError(null);
       try {
         const params = new URLSearchParams({ from, to });
+        // Forward-compatible: honoured if the backend adds it; otherwise we
+        // roll up to the top N client-side below.
+        params.set("topCategories", String(topN));
         const res = await fetch(`${endpoint}?${params}`, {
           signal: controller.signal,
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json: AggregatesResponse = await res.json();
-        const raw = Array.isArray(json.data) ? json.data : [];
-        setBuckets(raw.map(flattenAggregate));
+        setRawData(Array.isArray(json.data) ? json.data : []);
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
         setError((err as Error).message);
@@ -122,7 +172,7 @@ export default function Chart({
         setLoading(false);
       }
     },
-    [endpoint],
+    [endpoint, topN],
   );
 
   // Initial load + refetch whenever the SSE refresh signal changes.
@@ -153,16 +203,42 @@ export default function Chart({
     color: isDark ? "#f3f4f6" : "#111827",
   };
 
-  // Derive the stacked series keys from the data (every numeric field).
-  const seriesKeys = useMemo(() => {
-    const keys = new Set<string>();
-    for (const b of buckets) {
-      for (const [k, v] of Object.entries(b)) {
-        if (k !== "date" && typeof v === "number") keys.add(k);
-      }
-    }
-    return Array.from(keys);
-  }, [buckets]);
+  // Per-category totals for the current range (drives the summary table).
+  const categoryTotals = useMemo(
+    () => computeCategoryTotals(rawData),
+    [rawData],
+  );
+
+  // Stack only the top N *real* categories; everything else (including any
+  // backend-provided "Other" pseudo-category) rolls into a single "Other".
+  const topCategories = useMemo(
+    () =>
+      categoryTotals
+        .filter((c) => c.category !== OTHER_KEY)
+        .slice(0, topN)
+        .map((c) => c.category),
+    [categoryTotals, topN],
+  );
+  const withOther = categoryTotals.length > topCategories.length;
+
+  const buckets = useMemo(
+    () => rawData.map((entry) => buildBucket(entry, topCategories, withOther)),
+    [rawData, topCategories, withOther],
+  );
+
+  const seriesKeys = useMemo(
+    () => (withOther ? [...topCategories, OTHER_KEY] : topCategories),
+    [topCategories, withOther],
+  );
+
+  // Color per top category (by rank), with a fixed neutral for "Other".
+  const colorByCategory = useMemo(() => {
+    const map = new Map<string, string>();
+    topCategories.forEach((c, i) => map.set(c, COLORS[i % COLORS.length]));
+    return map;
+  }, [topCategories]);
+  const colorFor = (key: string) =>
+    key === OTHER_KEY ? OTHER_COLOR : (colorByCategory.get(key) ?? OTHER_COLOR);
 
   // Dragging the Brush selects a date window; debounce then refetch that window.
   const handleBrushChange = useCallback(
@@ -219,6 +295,7 @@ export default function Chart({
           No data for this range.
         </div>
       ) : (
+        <>
         <ResponsiveContainer width="100%" height={320}>
           <BarChart
             data={buckets}
@@ -250,7 +327,7 @@ export default function Chart({
                 key={key}
                 dataKey={key}
                 stackId={STACK_ID}
-                fill={COLORS[i % COLORS.length]}
+                fill={colorFor(key)}
                 radius={
                   i === seriesKeys.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]
                 }
@@ -266,6 +343,51 @@ export default function Chart({
             />
           </BarChart>
         </ResponsiveContainer>
+
+        {/* Category totals for the current range, sorted by revenue desc. */}
+        <div data-testid="category-totals" className="mt-4 overflow-x-auto">
+          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">
+            Category totals
+          </p>
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-gray-200 text-left text-gray-500 dark:border-gray-800">
+                <th className="py-1 pr-3 font-medium">Category</th>
+                <th className="py-1 pr-3 text-right font-medium">Revenue</th>
+                <th className="py-1 text-right font-medium">Orders</th>
+              </tr>
+            </thead>
+            <tbody>
+              {categoryTotals.map((ct) => (
+                <tr
+                  key={ct.category}
+                  className="border-b border-gray-100 last:border-0 dark:border-gray-800/60"
+                >
+                  <td className="py-1 pr-3">
+                    <span className="inline-flex items-center gap-1.5">
+                      <span
+                        aria-hidden
+                        className="h-2 w-2 rounded-sm"
+                        style={{
+                          backgroundColor:
+                            colorByCategory.get(ct.category) ?? OTHER_COLOR,
+                        }}
+                      />
+                      {ct.category}
+                    </span>
+                  </td>
+                  <td className="py-1 pr-3 text-right tabular-nums">
+                    {currencyFmt.format(ct.revenue)}
+                  </td>
+                  <td className="py-1 text-right tabular-nums">
+                    {numberFmt.format(ct.orders)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        </>
       )}
     </section>
   );
