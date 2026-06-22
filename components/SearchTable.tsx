@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 export type SearchRow = Record<string, unknown>;
 
 interface SearchResponse {
-  rows: SearchRow[];
+  data: SearchRow[];
   /** Opaque cursor for the next page, or null when there are no more results. */
   nextCursor: string | null;
 }
@@ -28,7 +28,7 @@ function formatCell(value: unknown): string {
 
 export default function SearchTable({
   refreshSignal = 0,
-  endpoint = "/api/search",
+  endpoint = "/api/orders",
   pageSize = 20,
 }: SearchTableProps) {
   const [query, setQuery] = useState("");
@@ -60,7 +60,7 @@ export default function SearchTable({
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json: SearchResponse = await res.json();
-        setRows(Array.isArray(json.rows) ? json.rows : []);
+        setRows(Array.isArray(json.data) ? json.data : []);
         setNextCursor(json.nextCursor ?? null);
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
@@ -136,6 +136,7 @@ export default function SearchTable({
       </header>
 
       <input
+        data-testid="search-input"
         type="search"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
@@ -171,6 +172,8 @@ export default function SearchTable({
               {rows.map((row, i) => (
                 <tr
                   key={(row.id as string | number | undefined) ?? i}
+                  data-testid="search-result"
+                  data-id={row.id as string | number | undefined}
                   className="border-b border-gray-100 hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-800/50"
                 >
                   {columns.map((col) => (
@@ -198,6 +201,8 @@ export default function SearchTable({
           </button>
           <button
             type="button"
+            data-testid="next-page"
+            data-cursor={nextCursor ?? undefined}
             onClick={goNext}
             disabled={!nextCursor || loading}
             className="rounded-md border border-gray-300 px-3 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-40 dark:border-gray-700"

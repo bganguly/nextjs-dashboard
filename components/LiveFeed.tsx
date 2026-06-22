@@ -44,7 +44,7 @@ function eventLabel(e: LiveEvent): string {
 
 export default function LiveFeed({
   onEvent,
-  endpoint = "/api/events",
+  endpoint = "/api/stream",
   maxItems = 25,
 }: LiveFeedProps) {
   const [items, setItems] = useState<LiveEvent[]>([]);

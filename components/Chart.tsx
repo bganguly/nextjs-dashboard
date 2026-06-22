@@ -19,8 +19,38 @@ export interface AggregateBucket {
   [series: string]: string | number;
 }
 
+/** One category's revenue within a date, as sent by the backend. */
+interface RawCategory {
+  category?: string;
+  name?: string;
+  totalRevenue?: number;
+  revenue?: number;
+}
+
+/** Raw backend row: a date plus its per-category revenue breakdown. */
+interface RawAggregate {
+  date: string;
+  categories: RawCategory[];
+}
+
 interface AggregatesResponse {
-  buckets: AggregateBucket[];
+  data: RawAggregate[];
+}
+
+/**
+ * Flatten `{ date, categories: [{ category, totalRevenue }] }` into a single
+ * stacked-bar bucket `{ date, [categoryName]: totalRevenue }`.
+ */
+function flattenAggregate(entry: RawAggregate): AggregateBucket {
+  const bucket: AggregateBucket = { date: entry.date };
+  for (const c of entry.categories ?? []) {
+    const name = c.category ?? c.name;
+    if (name == null) continue;
+    const value = Number(c.totalRevenue ?? c.revenue ?? 0);
+    const prev = typeof bucket[name] === "number" ? (bucket[name] as number) : 0;
+    bucket[name] = prev + value;
+  }
+  return bucket;
 }
 
 interface ChartProps {
@@ -83,7 +113,8 @@ export default function Chart({
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json: AggregatesResponse = await res.json();
-        setBuckets(Array.isArray(json.buckets) ? json.buckets : []);
+        const raw = Array.isArray(json.data) ? json.data : [];
+        setBuckets(raw.map(flattenAggregate));
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
         setError((err as Error).message);
@@ -146,7 +177,10 @@ export default function Chart({
   );
 
   return (
-    <section className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+    <section
+      data-testid="chart"
+      className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900"
+    >
       <header className="mb-3 flex items-center justify-between">
         <div>
           <h2 className="text-base font-semibold">Aggregates</h2>
