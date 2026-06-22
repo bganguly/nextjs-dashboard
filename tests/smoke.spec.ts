@@ -88,18 +88,22 @@ test.describe("smoke", () => {
     ).toBeTruthy();
   });
 
-  test("a chart renders", async ({ page }) => {
+  test("a chart renders (with real data, not the empty state)", async ({ page }) => {
     await page.goto("/");
-    const chart = await firstVisible(page, [
-      "[data-testid='chart']",
-      "[data-testid='chart'] svg",
-      "[data-testid='chart'] canvas",
-      "main svg",
-      "main canvas",
-      "[role='img']",
-    ]);
-    expect(chart, "no chart element (svg/canvas/[data-testid=chart]) found").not.toBeNull();
-    await expect(chart!).toBeVisible();
+    const chart = page.locator("[data-testid='chart']").first();
+    await expect(chart).toBeVisible();
+
+    const bars = chart.locator(
+      ".recharts-bar-rectangle, .recharts-rectangle, svg path.recharts-rectangle, svg rect",
+    );
+    const empty = chart.getByText(/no data|failed to load/i);
+
+    // Wait for the async chart to resolve to EITHER bars or an empty/error
+    // state, then require it to be bars (the container is always present, so a
+    // loose "is it visible" check would false-pass on an empty chart).
+    await expect(bars.or(empty).first()).toBeVisible({ timeout: 20_000 });
+    await expect(empty, "chart rendered its empty/error state, not data").toHaveCount(0);
+    await expect(bars.first(), "no chart bars rendered").toBeVisible();
   });
 
   test("search returns results", async ({ page }) => {
@@ -118,6 +122,7 @@ test.describe("smoke", () => {
     const results = page
       .locator("[data-testid='search-result'], [data-testid='search-results'] li, table tbody tr")
       .first();
-    await expect(results, "search produced no results").toBeVisible({ timeout: 10_000 });
+    // Generous: ILIKE search on 4M rows is slow until wt1's pg_trgm index lands.
+    await expect(results, "search produced no results").toBeVisible({ timeout: 25_000 });
   });
 });
