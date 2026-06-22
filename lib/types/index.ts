@@ -141,11 +141,15 @@ export interface CreateOrderInput {
 
 // ---------- Aggregates ----------
 
-export interface AggregateQueryInput {
+/**
+ * Aggregates honor the same filter set as GET /api/orders (status, regionCode
+ * comma-lists, placedAt range via from/to, minTotal/maxTotal). `from`/`to` are
+ * required here and double as the daily date range.
+ */
+export interface AggregateQueryInput extends OrderFilterInput {
   from: string;
   to: string;
-  regionCode?: string | null;
-  /** Keep only the top-N categories by revenue per day; rest roll into "Other". */
+  /** Keep only the top-N categories by revenue per day; rest roll into "Others". */
   topCategories?: number | null;
 }
 

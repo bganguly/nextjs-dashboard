@@ -145,24 +145,32 @@ return `400 BAD_REQUEST`.
 
 ## GET /api/aggregates
 
-Daily totals grouped by category over a date range.
+Daily totals grouped by category, computed over the **filtered** order set. The
+filter parameters mirror `GET /api/orders` exactly (same WHERE semantics), so the
+chart and the table can share one filter bar.
 
 ### Query parameters
 
-| param           | type   | required | notes                                                  |
-| --------------- | ------ | -------- | ------------------------------------------------------ |
-| `from`          | string | yes      | `YYYY-MM-DD` (inclusive)                                |
-| `to`            | string | yes      | `YYYY-MM-DD` (inclusive)                                |
-| `regionCode`    | string | no       | Filter to a single region code                         |
-| `topCategories` | number | no       | Keep top-N categories/day by revenue (default `5`); the rest roll into an `"Other"` bucket. |
+| param           | type   | required | notes                                                                                      |
+| --------------- | ------ | -------- | ------------------------------------------------------------------------------------------ |
+| `from`          | string | yes      | `YYYY-MM-DD` (inclusive). Doubles as the `placedAt` lower bound.                            |
+| `to`            | string | yes      | `YYYY-MM-DD` (inclusive). Date-only is treated as end-of-day.                               |
+| `status`        | string | no       | Filter by `OrderStatus`. Comma-separated list ok. Unknown values are ignored.              |
+| `regionCode`    | string | no       | Filter by region code. **Comma-separated list ok** (was single).                           |
+| `minTotal`      | number | no       | Inclusive lower bound on order `total`.                                                     |
+| `maxTotal`      | number | no       | Inclusive upper bound on order `total`.                                                     |
+| `topCategories` | number | no       | Keep top-N categories/day by revenue (default `5`); the rest roll into an `"Others"` bucket. |
 
-Missing/invalid dates return `400 BAD_REQUEST`.
+Missing/invalid dates return `400 BAD_REQUEST`. All filters combine (AND) and
+narrow the orders that feed the daily category buckets — category revenue/items
+come from the line items of the matching orders.
 
-`topCategories` caps each day's `categories` map: only the N highest-revenue
-categories are kept by name, and a single `"Other"` entry holds the summed
-`totalOrders`/`totalRevenue`/`totalItems` (with `avgOrderValue` recomputed) of
-the remainder. Day-level `totals` are unchanged. No `"Other"` key is added when a
-day has ≤ N categories.
+`topCategories` caps each day's `categories` map to at most **N+1** keys: only the
+N highest-revenue categories are kept by name, and a single `"Others"` entry holds
+the summed `totalOrders`/`totalRevenue`/`totalItems` (with `avgOrderValue`
+recomputed) of the remainder. `"Others"` is the literal, stable rollup key.
+Day-level `totals` are unchanged (they reflect every category). No `"Others"` key
+is added when a day has ≤ N categories.
 
 ### 200 response
 

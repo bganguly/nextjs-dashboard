@@ -104,7 +104,7 @@ function toOrderDTO(o: OrderWithRelations): OrderDTO {
 
 // ---------- Filters ----------
 
-interface ResolvedFilters {
+export interface ResolvedFilters {
   statuses: OrderStatus[];
   regionIds: number[] | null; // null = no region filter; [] = filter that matches nothing
   from: Date | null;
@@ -128,9 +128,12 @@ function parseDateBoundary(value: string | null | undefined, edge: "start" | "en
   if (Number.isNaN(d.getTime())) {
     throw new AppError("BAD_REQUEST", `invalid date filter: ${value}`);
   }
-  // A date-only `to` should include the whole day.
+  // A date-only `to` should include the whole day. Use UTC end-of-day so it is
+  // symmetric with a date-only `from`, which `new Date("YYYY-MM-DD")` parses as
+  // UTC midnight — otherwise the two bounds straddle different timezones and the
+  // final day's rows get dropped on non-UTC hosts.
   if (edge === "end" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    d.setHours(23, 59, 59, 999);
+    d.setUTCHours(23, 59, 59, 999);
   }
   return d;
 }
@@ -142,7 +145,7 @@ function parseNumber(value: number | null | undefined, name: string): number | n
   return n;
 }
 
-async function resolveFilters(input: OrderFilterInput): Promise<ResolvedFilters> {
+export async function resolveFilters(input: OrderFilterInput): Promise<ResolvedFilters> {
   const statuses = parseList(input.status).filter((s): s is OrderStatus =>
     (ORDER_STATUSES as readonly string[]).includes(s),
   );
@@ -173,8 +176,12 @@ async function resolveFilters(input: OrderFilterInput): Promise<ResolvedFilters>
   return { statuses, regionIds, from, to, minTotal, maxTotal, hasAny };
 }
 
-/** SQL conditions for the resolved filters — all on `orders` columns (indexable). */
-function buildFilterConditions(f: ResolvedFilters): Prisma.Sql[] {
+/**
+ * SQL conditions for the resolved filters — all on `orders` columns (indexable),
+ * referencing the `o` alias. Reused by the aggregates service so both endpoints
+ * apply identical filter semantics.
+ */
+export function buildFilterConditions(f: ResolvedFilters): Prisma.Sql[] {
   const c: Prisma.Sql[] = [];
   if (f.statuses.length) c.push(Prisma.sql`o.status = ANY(${f.statuses}::text[]::"OrderStatus"[])`);
   if (f.regionIds !== null) c.push(Prisma.sql`o."regionId" = ANY(${f.regionIds})`);
