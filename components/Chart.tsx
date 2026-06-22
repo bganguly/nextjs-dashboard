@@ -98,6 +98,19 @@ const currencyFmt = new Intl.NumberFormat("en-US", {
 });
 const numberFmt = new Intl.NumberFormat("en-US");
 
+/**
+ * Abbreviate large revenue values for the Y axis: 25000 → "25k", 1_200_000 →
+ * "1.2M". Hand-rolled (rather than Intl compact) to keep lowercase "k" and
+ * avoid the "25K" casing surprise. Drops the decimal on round values.
+ */
+const compactNumber = (n: number): string => {
+  const abs = Math.abs(n);
+  if (abs >= 1_000_000)
+    return `${(n / 1_000_000).toFixed(abs % 1_000_000 ? 1 : 0)}M`;
+  if (abs >= 1_000) return `${(n / 1_000).toFixed(abs % 1_000 ? 1 : 0)}k`;
+  return `${n}`;
+};
+
 interface ChartProps {
   /** Bumped by the SSE LiveFeed to force a refetch of the current range. */
   refreshSignal?: number;
@@ -311,15 +324,17 @@ export default function Chart({
             />
             <YAxis
               fontSize={12}
-              width={48}
+              width={56}
               stroke={axisColor}
               tick={{ fill: axisColor }}
+              tickFormatter={compactNumber}
             />
             <Tooltip
               contentStyle={tooltipStyle}
               labelStyle={{ color: tooltipStyle.color }}
               itemStyle={{ color: tooltipStyle.color }}
               cursor={{ fill: isDark ? "#ffffff10" : "#00000008" }}
+              formatter={(v) => currencyFmt.format(Number(v))}
             />
             <Legend wrapperStyle={{ fontSize: 12, color: axisColor }} />
             {seriesKeys.map((key, i) => (

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Chart from "@/components/Chart";
 import SearchTable, { type SearchRow } from "@/components/SearchTable";
 import LiveFeed from "@/components/LiveFeed";
@@ -8,7 +8,28 @@ import ThemeToggle from "@/components/ThemeToggle";
 import FilterSidebar, {
   EMPTY_FILTERS,
   type OrderFilters,
+  type RegionOption,
 } from "@/components/FilterSidebar";
+
+/** Merge new regions into the list by code (name wins if present), sorted. */
+function mergeRegions(
+  prev: RegionOption[],
+  incoming: RegionOption[],
+): RegionOption[] {
+  const map = new Map(prev.map((r) => [r.code, r]));
+  let changed = false;
+  for (const r of incoming) {
+    if (!r?.code) continue;
+    const existing = map.get(r.code);
+    const name = r.name || existing?.name || r.code;
+    if (!existing || existing.name !== name) {
+      map.set(r.code, { code: r.code, name });
+      changed = true;
+    }
+  }
+  if (!changed) return prev;
+  return [...map.values()].sort((a, b) => a.code.localeCompare(b.code));
+}
 
 /**
  * Dashboard shell. A single SSE connection lives in LiveFeed; each event bumps
@@ -22,23 +43,42 @@ import FilterSidebar, {
 export default function Dashboard() {
   const [refreshSignal, setRefreshSignal] = useState(0);
   const [filters, setFilters] = useState<OrderFilters>(EMPTY_FILTERS);
-  const [regionOptions, setRegionOptions] = useState<string[]>([]);
+  const [regionOptions, setRegionOptions] = useState<RegionOption[]>([]);
 
   const handleEvent = useCallback(() => {
     setRefreshSignal((n) => n + 1);
   }, []);
 
-  // Accumulate distinct region codes seen in the loaded orders.
+  // Prefer the full region list (with display names) from /api/regions. If that
+  // endpoint isn't available we fall back to codes discovered from order rows.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/regions")
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`${r.status}`))))
+      .then((data: RegionOption[]) => {
+        if (cancelled || !Array.isArray(data)) return;
+        setRegionOptions((prev) => mergeRegions(prev, data));
+      })
+      .catch(() => {
+        /* no regions endpoint — handleRows discovery covers it */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Discover region codes from loaded orders (fallback / supplement; uses the
+  // region name from the row when present, else the code).
   const handleRows = useCallback((rows: SearchRow[]) => {
-    setRegionOptions((prev) => {
-      const set = new Set(prev);
-      for (const row of rows) {
-        const region = row.region as { code?: string } | undefined;
-        if (region?.code) set.add(region.code);
+    const incoming: RegionOption[] = [];
+    for (const row of rows) {
+      const region = row.region as { code?: string; name?: string } | undefined;
+      if (region?.code) {
+        incoming.push({ code: region.code, name: region.name ?? region.code });
       }
-      const next = [...set].sort();
-      return next.length === prev.length ? prev : next;
-    });
+    }
+    if (incoming.length === 0) return;
+    setRegionOptions((prev) => mergeRegions(prev, incoming));
   }, []);
 
   return (

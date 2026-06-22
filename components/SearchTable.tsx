@@ -200,11 +200,15 @@ export default function SearchTable({
     [totalPages],
   );
 
+  // Status and region are controlled exclusively from the filter sidebar, so
+  // they're not rendered as table columns (the fields still come back in the
+  // response — we just skip them here).
   const columns = useMemo(() => {
+    const HIDDEN_COLUMNS = new Set(["status", "region"]);
     const cols: string[] = [];
     for (const row of rows) {
       for (const key of Object.keys(row)) {
-        if (!cols.includes(key)) cols.push(key);
+        if (!cols.includes(key) && !HIDDEN_COLUMNS.has(key)) cols.push(key);
       }
     }
     return cols;
