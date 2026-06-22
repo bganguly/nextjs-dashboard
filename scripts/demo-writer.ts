@@ -9,9 +9,12 @@
 import { PrismaClient } from "@prisma/client";
 import { faker } from "@faker-js/faker";
 import { Client } from "pg";
+import { resolvePgUrl } from "../lib/pg-url";
 
 const prisma = new PrismaClient({ log: ["error"] });
-const pg = new Client({ connectionString: process.env.DATABASE_URL });
+// Raw pg (for NOTIFY) needs a standard postgresql:// URL — DATABASE_URL may be a
+// prisma+postgres:// proxy URL the pg driver cannot parse. See lib/pg-url.ts.
+const pg = new Client({ connectionString: resolvePgUrl() });
 
 async function pickRandom<T extends { id: number }>(
   findMany: (args: { take: number; skip: number; select: { id: true } }) => Promise<T[]>,

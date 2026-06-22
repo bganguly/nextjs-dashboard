@@ -1,5 +1,6 @@
 import { Client } from "pg";
 import { AppError } from "@/lib/errors";
+import { resolvePgUrl } from "@/lib/pg-url";
 import type { OrderNotification } from "@/lib/types";
 
 /**
@@ -22,7 +23,14 @@ export interface StreamSubscription {
 export async function subscribeToOrders(
   handlers: OrderStreamHandlers,
 ): Promise<StreamSubscription> {
-  const client = new Client({ connectionString: process.env.DATABASE_URL });
+  let connectionString: string;
+  try {
+    connectionString = resolvePgUrl();
+  } catch (err) {
+    throw new AppError("INTERNAL", err instanceof Error ? err.message : "invalid Postgres URL");
+  }
+
+  const client = new Client({ connectionString });
 
   const close = async () => {
     try {
@@ -67,7 +75,14 @@ export async function subscribeToOrders(
  * (e.g. the demo writer) to fan out newly created orders.
  */
 export async function publishOrderEvent(notification: OrderNotification): Promise<void> {
-  const client = new Client({ connectionString: process.env.DATABASE_URL });
+  let connectionString: string;
+  try {
+    connectionString = resolvePgUrl();
+  } catch (err) {
+    throw new AppError("INTERNAL", err instanceof Error ? err.message : "invalid Postgres URL");
+  }
+
+  const client = new Client({ connectionString });
   try {
     await client.connect();
     await client.query("SELECT pg_notify($1, $2)", [CHANNEL, JSON.stringify(notification)]);
