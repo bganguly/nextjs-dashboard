@@ -25,6 +25,7 @@
     "eslint-config-next": "16.2.9",
     "nodemailer": "^9.0.1",
     "tailwindcss": "^4",
+    "tsx": "^4.22.4",
     "typescript": "^5"
   }
 }

@@ -43,3 +43,9 @@ next-env.d.ts
 # playwright
 /test-results/
 /playwright-report/
+
+# bot runtime artifacts
+/bot.log
+/scripts/bot.pid
+/scripts/.bot-state.json
+/scripts/.bot-inbox.log
