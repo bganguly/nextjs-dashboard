@@ -150,8 +150,13 @@ function isStatusRequest(text: string): boolean {
 }
 
 function isDecisionReply(text: string): boolean {
-  return /^\s*(\d+\s*[a-z]?(\s+\d+\s*[a-z]?)*|done|skip|yes|no|y|n|ok|okay|proceed|continue|cancel|stop)\s*$/i.test(
-    text,
+  const t = text.trim().toLowerCase();
+  if (!t || t.length > 60) return false;
+  // Choice codes like "1a", "2b", "1y 2n".
+  if (/^\d+\s*[a-z]?(\s+\d+\s*[a-z]?)*$/.test(t)) return true;
+  // Affirmative / negative words — also catches "wt1 yes", "yes yes", "go".
+  return /\b(y|n|yes|no|yep|nope|yup|sure|ok|okay|go|proceed|approve|approved|confirm|confirmed|skip|done|cancel|stop|continue|hold)\b/.test(
+    t,
   );
 }
 
