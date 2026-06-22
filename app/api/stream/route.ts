@@ -1,63 +1,53 @@
 import { NextRequest } from "next/server";
-import { Client } from "pg";
+import { subscribeToOrders } from "@/lib/services";
+import type { StreamEventName } from "@/lib/types";
 
-// GET /api/stream — SSE endpoint using Postgres LISTEN/NOTIFY
-// The channel "orders_channel" receives NOTIFY from a DB trigger or demo-writer.ts
+// GET /api/stream — SSE endpoint backed by Postgres LISTEN/NOTIFY.
+// All DB access is delegated to the stream service; this handler only adapts
+// the subscription to the Server-Sent Events wire format.
 export async function GET(req: NextRequest) {
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
     async start(controller) {
-      const client = new Client({ connectionString: process.env.DATABASE_URL });
-
-      const send = (event: string, data: unknown) => {
-        const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-        controller.enqueue(encoder.encode(payload));
+      const send = (event: StreamEventName, data: unknown) => {
+        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
       };
 
-      const cleanup = async () => {
+      let heartbeat: ReturnType<typeof setInterval> | undefined;
+      let subscription: { close: () => Promise<void> } | undefined;
+      let closed = false;
+
+      const shutdown = async () => {
+        if (closed) return;
+        closed = true;
+        if (heartbeat) clearInterval(heartbeat);
+        if (subscription) await subscription.close();
         try {
-          await client.query("UNLISTEN *");
-          await client.end();
+          controller.close();
         } catch {
-          // ignore cleanup errors
+          // already closed
         }
       };
 
       try {
-        await client.connect();
-        await client.query("LISTEN orders_channel");
-
-        send("connected", { ts: new Date().toISOString() });
-
-        client.on("notification", (msg) => {
-          try {
-            const payload = msg.payload ? JSON.parse(msg.payload) : {};
-            send("order", payload);
-          } catch {
-            send("order", { raw: msg.payload });
-          }
+        subscription = await subscribeToOrders({
+          onConnect: () => send("connected", { ts: new Date().toISOString() }),
+          onOrder: (n) => send("order", n),
+          onError: (e) => {
+            send("error", { message: e.message, code: e.code });
+            void shutdown();
+          },
         });
 
-        client.on("error", async (err) => {
-          send("error", { message: err.message });
-          await cleanup();
-          controller.close();
-        });
+        heartbeat = setInterval(() => send("heartbeat", { ts: new Date().toISOString() }), 25_000);
 
-        // Heartbeat every 25s to keep the connection alive
-        const heartbeat = setInterval(() => {
-          send("heartbeat", { ts: new Date().toISOString() });
-        }, 25_000);
-
-        req.signal.addEventListener("abort", async () => {
-          clearInterval(heartbeat);
-          await cleanup();
-          controller.close();
+        req.signal.addEventListener("abort", () => {
+          void shutdown();
         });
       } catch (err) {
-        send("error", { message: err instanceof Error ? err.message : "connection failed" });
-        controller.close();
+        send("error", { message: err instanceof Error ? err.message : "stream failed" });
+        await shutdown();
       }
     },
   });
