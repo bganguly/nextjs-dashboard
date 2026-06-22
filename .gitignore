@@ -49,3 +49,9 @@ next-env.d.ts
 /scripts/bot.pid
 /scripts/.bot-state.json
 /scripts/.bot-inbox.log
+
+# terraform / rds infra
+/infra/.terraform/
+/infra/*.tfstate
+/infra/*.tfstate.*
+/.env.rds
