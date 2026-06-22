@@ -24,6 +24,7 @@ const SCRIPTS = resolve(ROOT, "scripts");
 const STATUS_DIR = resolve(ROOT, "..", "STATUS");
 const STATE_FILE = resolve(SCRIPTS, ".bot-state.json");
 const INBOX_FILE = resolve(SCRIPTS, ".bot-inbox.log");
+const MODE_FILE = resolve(SCRIPTS, ".notify-mode.json");
 
 // ---------------------------------------------------------------------------
 // env + telegram
@@ -158,6 +159,51 @@ function isDecisionReply(text: string): boolean {
   return /\b(y|n|yes|no|yep|nope|yup|sure|ok|okay|go|proceed|approve|approved|confirm|confirmed|skip|done|cancel|stop|continue|hold)\b/.test(
     t,
   );
+}
+
+/**
+ * Detect a routing-mode command, e.g. "use telegram until 3pm",
+ * "telegram for 90m", "telegram between now and 5pm", "desktop",
+ * "telegram off". Returns the new mode, or null if not a mode command.
+ */
+function parseModeCommand(
+  text: string,
+): { channel: "desktop" | "telegram"; until: string | null } | null {
+  const t = text.trim().toLowerCase();
+
+  // Back to desktop / turn telegram off.
+  if (
+    /\b(desktop|at (my|the) desk|back at (my )?desk|telegram off|stop telegram|in[- ]?session)\b/.test(t) &&
+    !/telegram\s+(on|until|for|between)/.test(t)
+  ) {
+    return { channel: "desktop", until: null };
+  }
+
+  // Turn telegram on, optionally for a window.
+  if (/\b(use telegram|telegram on|telegram until|telegram for|telegram between|switch to telegram|telegram mode)\b/.test(t)) {
+    let until: string | null = null;
+    const now = new Date();
+    const forM = t.match(/for\s*(\d+)\s*(m|min|minutes|h|hr|hour|hours)\b/);
+    const untilM = t.match(/(?:until|till|to|between\s+now\s+and|and)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/);
+    if (forM) {
+      const n = parseInt(forM[1], 10);
+      const mins = forM[2].startsWith("h") ? n * 60 : n;
+      until = new Date(now.getTime() + mins * 60000).toISOString();
+    } else if (untilM) {
+      let h = parseInt(untilM[1], 10);
+      const mm = parseInt(untilM[2] || "0", 10);
+      const ap = untilM[3];
+      if (ap === "pm" && h < 12) h += 12;
+      if (ap === "am" && h === 12) h = 0;
+      const cand = new Date(now);
+      cand.setHours(h, mm, 0, 0);
+      if (cand <= now) cand.setDate(cand.getDate() + 1);
+      until = cand.toISOString();
+    }
+    return { channel: "telegram", until };
+  }
+
+  return null;
 }
 
 function isFullMode(text: string): boolean {
@@ -330,6 +376,25 @@ const HELP = "Try: where are we on wt2 · what's backend doing · where are we";
 async function handleMessage(text: string, state: State): Promise<void> {
   const trimmed = text.trim();
   if (!trimmed) return;
+
+  // 0) Routing-mode commands ("use telegram until 3pm", "desktop", ...).
+  const mode = parseModeCommand(trimmed);
+  if (mode) {
+    try {
+      writeFileSync(MODE_FILE, JSON.stringify(mode));
+    } catch (err) {
+      console.error("[bot] could not write mode:", err);
+    }
+    if (mode.channel === "telegram") {
+      const when = mode.until
+        ? `until ${new Date(mode.until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+        : "(on, no expiry)";
+      await send(`📲 Telegram mode ${when} — I'll route questions here.`);
+    } else {
+      await send("🖥️ Desktop mode — I'll ask in-session, not here.");
+    }
+    return;
+  }
 
   // 1) Decision replies: relayed (recorded) and acknowledged, logic unchanged.
   if (!isStatusRequest(trimmed) && isDecisionReply(trimmed)) {

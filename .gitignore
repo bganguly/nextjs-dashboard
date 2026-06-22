@@ -55,3 +55,4 @@ next-env.d.ts
 /infra/*.tfstate
 /infra/*.tfstate.*
 /.env.rds
+/scripts/.notify-mode.json
