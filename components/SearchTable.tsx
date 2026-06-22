@@ -5,10 +5,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 /** A result row. Columns are derived from the keys present in the rows. */
 export type SearchRow = Record<string, unknown>;
 
+type SortDir = "asc" | "desc";
+
 interface SearchResponse {
   data: SearchRow[];
-  /** Opaque cursor for the next page, or null when there are no more results. */
-  nextCursor: string | null;
+  page: number;
+  totalPages: number;
+  total: number;
 }
 
 interface SearchTableProps {
@@ -20,10 +23,34 @@ interface SearchTableProps {
 
 const SEARCH_DEBOUNCE_MS = 300;
 
+function cn(...classes: (string | false | undefined)[]): string {
+  return classes.filter(Boolean).join(" ");
+}
+
 function formatCell(value: unknown): string {
   if (value == null) return "";
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
+}
+
+type PageItem = number | "left-ellipsis" | "right-ellipsis";
+
+/** Windowed page list with ellipses: 1 … 4 [5] 6 … N. */
+function getPageItems(current: number, total: number): PageItem[] {
+  if (total <= 7) {
+    return Array.from({ length: total }, (_, i) => i + 1);
+  }
+  const sibling = 1;
+  const left = Math.max(current - sibling, 1);
+  const right = Math.min(current + sibling, total);
+  const items: PageItem[] = [1];
+  if (left > 2) items.push("left-ellipsis");
+  for (let i = Math.max(left, 2); i <= Math.min(right, total - 1); i++) {
+    items.push(i);
+  }
+  if (right < total - 1) items.push("right-ellipsis");
+  items.push(total);
+  return items;
 }
 
 export default function SearchTable({
@@ -32,20 +59,20 @@ export default function SearchTable({
   pageSize = 20,
 }: SearchTableProps) {
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [rows, setRows] = useState<SearchRow[]>([]);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [sort, setSort] = useState<string>("");
+  const [dir, setDir] = useState<SortDir>("asc");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Stack of cursors for the pages we've visited, enabling a "Previous" button.
-  // cursorStack[i] is the cursor that produced the currently visible page.
-  const [cursorStack, setCursorStack] = useState<(string | null)[]>([null]);
-
   const abortRef = useRef<AbortController | null>(null);
-  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchPage = useCallback(
-    async (q: string, cursor: string | null) => {
+    async (q: string, p: number, sortCol: string, sortDir: SortDir) => {
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
@@ -53,20 +80,29 @@ export default function SearchTable({
       setLoading(true);
       setError(null);
       try {
-        const params = new URLSearchParams({ q, limit: String(pageSize) });
-        if (cursor) params.set("cursor", cursor);
+        const params = new URLSearchParams({
+          q,
+          page: String(p),
+          pageSize: String(pageSize),
+        });
+        if (sortCol) {
+          params.set("sort", sortCol);
+          params.set("dir", sortDir);
+        }
         const res = await fetch(`${endpoint}?${params}`, {
           signal: controller.signal,
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json: SearchResponse = await res.json();
         setRows(Array.isArray(json.data) ? json.data : []);
-        setNextCursor(json.nextCursor ?? null);
+        setTotalPages(Math.max(1, json.totalPages ?? 1));
+        setTotal(json.total ?? 0);
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
         setError((err as Error).message);
         setRows([]);
-        setNextCursor(null);
+        setTotalPages(1);
+        setTotal(0);
       } finally {
         setLoading(false);
       }
@@ -74,42 +110,47 @@ export default function SearchTable({
     [endpoint, pageSize],
   );
 
-  // Debounced search: any query change resets pagination to the first page.
+  // Debounce the search box; any query change snaps back to page 1.
   useEffect(() => {
-    if (debounceTimer.current) clearTimeout(debounceTimer.current);
-    debounceTimer.current = setTimeout(() => {
-      setCursorStack([null]);
-      fetchPage(query, null);
+    const timer = setTimeout(() => {
+      setDebouncedQuery(query);
+      setPage(1);
     }, SEARCH_DEBOUNCE_MS);
-    return () => {
-      if (debounceTimer.current) clearTimeout(debounceTimer.current);
-    };
-  }, [query, fetchPage]);
+    return () => clearTimeout(timer);
+  }, [query]);
 
-  // SSE-driven refresh: refetch whichever page is currently shown.
+  // Single source of truth for fetching: reacts to query, page, sort, and the
+  // SSE refresh signal. Sorting and paging are server-side (no client sorting).
   useEffect(() => {
-    if (refreshSignal === 0) return;
-    fetchPage(query, cursorStack[cursorStack.length - 1]);
-    // Only react to the signal; query/cursor are read as current values.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshSignal]);
+    // Kicks off an async fetch (which toggles loading state); intentional.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchPage(debouncedQuery, page, sort, dir);
+  }, [debouncedQuery, page, sort, dir, refreshSignal, fetchPage]);
 
   useEffect(() => {
     return () => abortRef.current?.abort();
   }, []);
 
-  const goNext = useCallback(() => {
-    if (!nextCursor) return;
-    setCursorStack((s) => [...s, nextCursor]);
-    fetchPage(query, nextCursor);
-  }, [nextCursor, query, fetchPage]);
+  const toggleSort = useCallback(
+    (col: string) => {
+      if (sort === col) {
+        setDir((d) => (d === "asc" ? "desc" : "asc"));
+      } else {
+        setSort(col);
+        setDir("asc");
+      }
+      setPage(1);
+    },
+    [sort],
+  );
 
-  const goPrev = useCallback(() => {
-    if (cursorStack.length <= 1) return;
-    const stack = cursorStack.slice(0, -1);
-    setCursorStack(stack);
-    fetchPage(query, stack[stack.length - 1]);
-  }, [cursorStack, query, fetchPage]);
+  const goToPage = useCallback(
+    (n: number) => {
+      const clamped = Math.min(Math.max(n, 1), totalPages);
+      setPage(clamped);
+    },
+    [totalPages],
+  );
 
   const columns = useMemo(() => {
     const cols: string[] = [];
@@ -121,8 +162,10 @@ export default function SearchTable({
     return cols;
   }, [rows]);
 
-  const page = cursorStack.length;
-  const hasPrev = cursorStack.length > 1;
+  const pageItems = useMemo(
+    () => getPageItems(page, totalPages),
+    [page, totalPages],
+  );
 
   return (
     <section className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
@@ -141,7 +184,7 @@ export default function SearchTable({
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder="Search records…"
-        className="mb-3 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:border-gray-700 dark:bg-gray-950"
+        className="mb-3 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none placeholder:text-gray-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100"
         aria-label="Search records"
       />
 
@@ -158,14 +201,37 @@ export default function SearchTable({
           <table className="w-full border-collapse text-sm">
             <thead>
               <tr className="border-b border-gray-200 text-left dark:border-gray-800">
-                {columns.map((col) => (
-                  <th
-                    key={col}
-                    className="px-3 py-2 font-medium text-gray-500"
-                  >
-                    {col}
-                  </th>
-                ))}
+                {columns.map((col) => {
+                  const isSorted = sort === col;
+                  return (
+                    <th
+                      key={col}
+                      data-testid={`sort-${col}`}
+                      onClick={() => toggleSort(col)}
+                      aria-sort={
+                        isSorted
+                          ? dir === "asc"
+                            ? "ascending"
+                            : "descending"
+                          : "none"
+                      }
+                      className="cursor-pointer select-none px-3 py-2 font-medium text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                    >
+                      <span className="inline-flex items-center gap-1">
+                        {col}
+                        <span
+                          aria-hidden
+                          className={cn(
+                            "text-xs",
+                            isSorted ? "text-indigo-500" : "text-transparent",
+                          )}
+                        >
+                          {isSorted ? (dir === "asc" ? "▲" : "▼") : "▲"}
+                        </span>
+                      </span>
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
@@ -188,28 +254,73 @@ export default function SearchTable({
         )}
       </div>
 
-      <footer className="mt-3 flex items-center justify-between">
-        <span className="text-xs text-gray-400">Page {page}</span>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={goPrev}
-            disabled={!hasPrev || loading}
-            className="rounded-md border border-gray-300 px-3 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-40 dark:border-gray-700"
-          >
-            Previous
-          </button>
-          <button
-            type="button"
-            data-testid="next-page"
-            data-cursor={nextCursor ?? undefined}
-            onClick={goNext}
-            disabled={!nextCursor || loading}
-            className="rounded-md border border-gray-300 px-3 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-40 dark:border-gray-700"
-          >
-            Next
-          </button>
-        </div>
+      <footer className="mt-4 flex flex-wrap items-center justify-between gap-3">
+        <span className="text-xs text-gray-500 dark:text-gray-400">
+          Page {page} of {totalPages} · {total} results
+        </span>
+
+        {totalPages > 1 && (
+          <nav aria-label="Pagination">
+            <ul className="flex items-center gap-1">
+              <li>
+                <button
+                  type="button"
+                  data-testid="prev-page"
+                  onClick={() => goToPage(page - 1)}
+                  disabled={page <= 1 || loading}
+                  className="flex h-9 items-center rounded-md border border-gray-300 px-3 text-sm hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-gray-700 dark:hover:bg-gray-800"
+                >
+                  Prev
+                </button>
+              </li>
+
+              {pageItems.map((item) => {
+                if (item === "left-ellipsis" || item === "right-ellipsis") {
+                  return (
+                    <li
+                      key={item}
+                      aria-hidden
+                      className="px-2 text-sm text-gray-400"
+                    >
+                      …
+                    </li>
+                  );
+                }
+                const isActive = item === page;
+                return (
+                  <li key={item} data-testid={`page-${item}`}>
+                    <button
+                      type="button"
+                      onClick={() => goToPage(item)}
+                      aria-current={isActive ? "page" : undefined}
+                      data-testid={isActive ? "current-page" : undefined}
+                      className={cn(
+                        "flex h-9 min-w-9 items-center justify-center rounded-md px-3 text-sm transition-colors",
+                        isActive
+                          ? "bg-indigo-600 text-white"
+                          : "border border-gray-300 hover:bg-gray-100 dark:border-gray-700 dark:hover:bg-gray-800",
+                      )}
+                    >
+                      {item}
+                    </button>
+                  </li>
+                );
+              })}
+
+              <li>
+                <button
+                  type="button"
+                  data-testid="next-page"
+                  onClick={() => goToPage(page + 1)}
+                  disabled={page >= totalPages || loading}
+                  className="flex h-9 items-center rounded-md border border-gray-300 px-3 text-sm hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-gray-700 dark:hover:bg-gray-800"
+                >
+                  Next
+                </button>
+              </li>
+            </ul>
+          </nav>
+        )}
       </footer>
     </section>
   );

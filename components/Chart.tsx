@@ -12,6 +12,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { useIsDark } from "@/hooks/useIsDark";
 
 /** One x-axis bucket. `date` is the label; every other numeric key is a stack series. */
 export interface AggregateBucket {
@@ -127,6 +128,8 @@ export default function Chart({
 
   // Initial load + refetch whenever the SSE refresh signal changes.
   useEffect(() => {
+    // Kicks off an async fetch (which toggles loading state); intentional.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchAggregates(range.from, range.to);
     // range.from/range.to intentionally omitted: drag handles its own fetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -138,6 +141,18 @@ export default function Chart({
       if (dragTimer.current) clearTimeout(dragTimer.current);
     };
   }, []);
+
+  const isDark = useIsDark();
+  // recharts renders raw SVG and can't use Tailwind `dark:` utilities, so pick
+  // grid/axis/tooltip colors from the resolved theme.
+  const gridStroke = isDark ? "#374151" : "#e5e7eb";
+  const axisColor = isDark ? "#9ca3af" : "#6b7280";
+  const tooltipStyle = {
+    backgroundColor: isDark ? "#1f2937" : "#ffffff",
+    border: `1px solid ${isDark ? "#374151" : "#e5e7eb"}`,
+    borderRadius: 8,
+    color: isDark ? "#f3f4f6" : "#111827",
+  };
 
   // Derive the stacked series keys from the data (every numeric field).
   const seriesKeys = useMemo(() => {
@@ -210,11 +225,27 @@ export default function Chart({
             data={buckets}
             margin={{ top: 8, right: 16, left: 0, bottom: 0 }}
           >
-            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-            <XAxis dataKey="date" fontSize={12} tickMargin={8} />
-            <YAxis fontSize={12} width={48} />
-            <Tooltip />
-            <Legend />
+            <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
+            <XAxis
+              dataKey="date"
+              fontSize={12}
+              tickMargin={8}
+              stroke={axisColor}
+              tick={{ fill: axisColor }}
+            />
+            <YAxis
+              fontSize={12}
+              width={48}
+              stroke={axisColor}
+              tick={{ fill: axisColor }}
+            />
+            <Tooltip
+              contentStyle={tooltipStyle}
+              labelStyle={{ color: tooltipStyle.color }}
+              itemStyle={{ color: tooltipStyle.color }}
+              cursor={{ fill: isDark ? "#ffffff10" : "#00000008" }}
+            />
+            <Legend wrapperStyle={{ fontSize: 12, color: axisColor }} />
             {seriesKeys.map((key, i) => (
               <Bar
                 key={key}
@@ -230,6 +261,7 @@ export default function Chart({
               dataKey="date"
               height={28}
               stroke="#6366f1"
+              fill={isDark ? "#111827" : "#ffffff"}
               travellerWidth={10}
               onChange={handleBrushChange}
             />

@@ -59,7 +59,9 @@ export function useSSE<T = unknown>(
 
   // Keep the latest callback without re-subscribing every render.
   const onMessageRef = useRef(onMessage);
-  onMessageRef.current = onMessage;
+  useEffect(() => {
+    onMessageRef.current = onMessage;
+  });
 
   const sourceRef = useRef<EventSource | null>(null);
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -71,6 +73,8 @@ export function useSSE<T = unknown>(
 
   useEffect(() => {
     if (!enabled) {
+      // Syncing connection lifecycle to the `enabled` flag; intentional.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setStatus("closed");
       return;
     }
