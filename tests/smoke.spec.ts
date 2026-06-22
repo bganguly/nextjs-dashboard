@@ -116,7 +116,7 @@ test.describe("smoke", () => {
     await input!.press("Enter");
 
     const results = page
-      .locator("[data-testid='search-results'] [data-testid='search-result'], [data-testid='search-results'] li, [data-testid='search-result']")
+      .locator("[data-testid='search-result'], [data-testid='search-results'] li, table tbody tr")
       .first();
     await expect(results, "search produced no results").toBeVisible({ timeout: 10_000 });
   });

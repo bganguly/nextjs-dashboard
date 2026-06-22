@@ -19,10 +19,11 @@ async function firstPresent(page: Page, selectors: string[]): Promise<Locator | 
 
 function resultsLocator(page: Page): Locator {
   return page.locator(
-    "[data-testid='search-results'] [data-testid='search-result']," +
+    "[data-testid='search-result']," +
+      " [data-testid='search-results'] [data-testid='search-result']," +
       " [data-testid='search-results'] li," +
       " [data-testid='result-row']," +
-      " [data-testid='search-result']",
+      " table tbody tr",
   );
 }
 
