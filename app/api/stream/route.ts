@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
           onConnect: () => send("connected", { ts: new Date().toISOString() }),
           onOrder: (n) => send("order", n),
           onError: (e) => {
-            send("error", { message: e.message, code: e.code });
+            send("error", { message: e.message, code: e.code, ...(e.details ? { details: e.details } : {}) });
             void shutdown();
           },
         });
@@ -46,7 +46,9 @@ export async function GET(req: NextRequest) {
           void shutdown();
         });
       } catch (err) {
-        send("error", { message: err instanceof Error ? err.message : "stream failed" });
+        const message = err instanceof Error ? err.message : "stream failed";
+        const details = err instanceof Error && "details" in err ? (err as { details: unknown }).details : undefined;
+        send("error", { message, ...(details ? { details } : {}) });
         await shutdown();
       }
     },

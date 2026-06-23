@@ -2,6 +2,7 @@ import { Client } from "pg";
 import { AppError } from "@/lib/errors";
 import { resolvePgUrl } from "@/lib/pg-url";
 import type { OrderNotification } from "@/lib/types";
+import { prisma } from "@/lib/prisma";
 
 /**
  * Real-time order stream backed by Postgres LISTEN/NOTIFY. The raw `pg` driver
@@ -71,26 +72,9 @@ export async function subscribeToOrders(
 }
 
 /**
- * Publish an order event to every connected SSE subscriber. Used by writers
- * (e.g. the demo writer) to fan out newly created orders.
+ * Publish an order event to every connected SSE subscriber. Uses the Prisma
+ * connection pool so no new TCP connection is opened per call.
  */
 export async function publishOrderEvent(notification: OrderNotification): Promise<void> {
-  let connectionString: string;
-  try {
-    connectionString = resolvePgUrl();
-  } catch (err) {
-    throw new AppError("INTERNAL", err instanceof Error ? err.message : "invalid Postgres URL");
-  }
-
-  const client = new Client({ connectionString });
-  try {
-    await client.connect();
-    await client.query("SELECT pg_notify($1, $2)", [CHANNEL, JSON.stringify(notification)]);
-  } catch (err) {
-    throw new AppError("DB_ERROR", "failed to publish order event", {
-      cause: err instanceof Error ? err.message : String(err),
-    });
-  } finally {
-    await client.end().catch(() => {});
-  }
+  await prisma.$executeRaw`SELECT pg_notify('orders_channel', ${JSON.stringify(notification)})`;
 }

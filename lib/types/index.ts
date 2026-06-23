@@ -29,6 +29,7 @@ export interface RegionSummary {
 
 /** Lightweight region entry for filter dropdowns (GET /api/regions). */
 export interface RegionOption {
+  id: number;
   code: string;
   name: string;
 }
@@ -139,6 +140,13 @@ export interface CreateOrderInput {
   items: CreateOrderItemInput[];
 }
 
+export interface CreateOrderResult {
+  id: number;
+  status: string;
+  total: number;
+  placedAt: string;
+}
+
 // ---------- Aggregates ----------
 
 /**
@@ -149,6 +157,8 @@ export interface CreateOrderInput {
 export interface AggregateQueryInput extends OrderFilterInput {
   from: string;
   to: string;
+  /** Free-text search over customer name/email and order notes (ILIKE). */
+  q?: string | null;
   /** Keep only the top-N categories by revenue per day; rest roll into "Others". */
   topCategories?: number | null;
 }

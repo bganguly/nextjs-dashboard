@@ -9,6 +9,7 @@ export * from "./products.service";
 export * from "./regions.service";
 export * from "./search.service";
 export * from "./stream.service";
+export * from "./stats.service";
 
 // Typed error helpers are re-exported so routes can map failures to HTTP
 // responses without reaching outside the service layer.

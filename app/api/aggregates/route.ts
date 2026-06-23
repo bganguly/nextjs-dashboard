@@ -16,6 +16,7 @@ export async function GET(req: NextRequest) {
     const data = await getDailyAggregates({
       from: searchParams.get("from") ?? "",
       to: searchParams.get("to") ?? "",
+      q: searchParams.get("q"),
       status: searchParams.get("status"),
       regionCode: searchParams.get("regionCode"),
       minTotal: num("minTotal"),

@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { AppError, mapDbError } from "@/lib/errors";
 import type {
   CreateOrderInput,
+  CreateOrderResult,
   FacetCount,
   OrderDTO,
   OrderFacets,
@@ -14,6 +15,8 @@ import type {
   OrderStatus,
   SortDir,
 } from "@/lib/types";
+import { publishOrderEvent } from "./stream.service";
+import { updateDailySummary } from "./aggregates.service";
 
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
@@ -66,9 +69,9 @@ function normalizeDir(dir: string | null | undefined): SortDir {
   return dir === "asc" || dir === "desc" ? dir : DEFAULT_DIR;
 }
 
-/** Escape LIKE/ILIKE wildcards so user input is matched literally. */
-function escapeLike(input: string): string {
-  return input.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+/** Strip LIKE/ILIKE wildcards so user input is matched literally. */
+export function escapeLike(input: string): string {
+  return input.replace(/[%_]/g, "");
 }
 
 const orderInclude = {
@@ -244,12 +247,11 @@ export async function listOrders(input: OrderListInput): Promise<OrderListResult
       const pattern = `%${escapeLike(q)}%`;
       const custRows = await prisma.$queryRaw<{ id: number }[]>(Prisma.sql`
         SELECT id FROM customers
-        WHERE ("firstName" || ' ' || "lastName" || ' ' || email) ILIKE ${pattern} ESCAPE '\\'
-        LIMIT ${TEXT_MATCH_CAP + 1}`);
+        WHERE ("firstName" || ' ' || "lastName" || ' ' || email) ILIKE ${pattern}        LIMIT ${TEXT_MATCH_CAP + 1}`);
       broadText = custRows.length > TEXT_MATCH_CAP;
       textCond = broadText
-        ? Prisma.sql`((c."firstName" || ' ' || c."lastName" || ' ' || c.email) ILIKE ${pattern} ESCAPE '\\' OR o.notes ILIKE ${pattern} ESCAPE '\\')`
-        : Prisma.sql`(o."customerId" = ANY(${custRows.map((r) => r.id)}) OR o.notes ILIKE ${pattern} ESCAPE '\\')`;
+        ? Prisma.sql`((c."firstName" || ' ' || c."lastName" || ' ' || c.email) ILIKE ${pattern} OR o.notes ILIKE ${pattern})`
+        : Prisma.sql`(o."customerId" = ANY(${custRows.map((r) => r.id)}) OR o.notes ILIKE ${pattern})`;
     }
 
     const conds = [...(textCond ? [textCond] : []), ...filterConds];
@@ -372,7 +374,7 @@ async function hydrateOrders(ids: number[]): Promise<OrderDTO[]> {
     .map(toOrderDTO);
 }
 
-export async function createOrder(input: CreateOrderInput): Promise<OrderDTO> {
+export async function createOrder(input: CreateOrderInput): Promise<CreateOrderResult> {
   if (!input.customerId || !input.regionId || !Array.isArray(input.items) || input.items.length === 0) {
     throw new AppError("BAD_REQUEST", "customerId, regionId, and at least one item are required");
   }
@@ -407,9 +409,20 @@ export async function createOrder(input: CreateOrderInput): Promise<OrderDTO> {
           })),
         },
       },
-      include: orderInclude,
     });
-    return toOrderDTO(created);
+    publishOrderEvent({
+      id: created.id,
+      total: Number(created.total),
+      customerId: created.customerId,
+      placedAt: created.placedAt.toISOString(),
+    }).catch(() => {});
+    updateDailySummary(created.id).catch(() => {});
+    return {
+      id: created.id,
+      status: created.status,
+      total: Number(created.total),
+      placedAt: created.placedAt.toISOString(),
+    };
   } catch (err) {
     mapDbError(err, "createOrder");
   }

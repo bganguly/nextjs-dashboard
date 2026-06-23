@@ -6,7 +6,7 @@ import type { RegionOption } from "@/lib/types";
 export async function listRegions(): Promise<RegionOption[]> {
   try {
     return await prisma.region.findMany({
-      select: { code: true, name: true },
+      select: { id: true, code: true, name: true },
       orderBy: { name: "asc" },
     });
   } catch (err) {
