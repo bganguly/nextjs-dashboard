@@ -26,7 +26,12 @@ export async function subscribeToOrders(
 ): Promise<StreamSubscription> {
   let connectionString: string;
   try {
-    connectionString = resolvePgUrl();
+    const rawUrl = resolvePgUrl();
+    // Strip sslmode from the URL so it doesn't conflict with the ssl constructor option.
+    // pg v8 parses sslmode and can override the ssl object we pass in.
+    const parsed = new URL(rawUrl);
+    parsed.searchParams.delete("sslmode");
+    connectionString = parsed.toString();
   } catch (err) {
     throw new AppError("INTERNAL", err instanceof Error ? err.message : "invalid Postgres URL");
   }
