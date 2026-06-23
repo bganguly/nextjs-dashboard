@@ -57,9 +57,13 @@ export default function LiveFeed({
     [onEvent, maxItems],
   );
 
+  // Only content events reach handleMessage. Stream errors are surfaced via the
+  // `status` state below (red/amber dot) — they must NOT be in this list, or an
+  // `event: error` from the backend would bump refreshSignal and, with useSSE's
+  // ~1s reconnect, cause a repaint loop.
   const { status } = useSSE<LiveEvent>(endpoint, {
     onMessage: handleMessage,
-    events: ["connected", "order", "heartbeat", "error"],
+    events: ["connected", "order", "heartbeat"],
   });
   const statusStyle = STATUS_STYLES[status];
 

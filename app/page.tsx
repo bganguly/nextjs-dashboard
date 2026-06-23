@@ -63,12 +63,13 @@ export default function Dashboard() {
   } | null>(null);
 
   const handleEvent = useCallback((event: LiveEvent) => {
-    // Only order events carry an id/total; ignore heartbeats/errors for
-    // animation targeting (they still refresh the views).
+    // Only order events carry an id — heartbeats and connected events don't, and
+    // must NOT trigger a refetch (otherwise the list repaints on every beat).
+    if (event.id == null) return;
     const id = event.id;
     const date = eventDay(event.placedAt ?? event.timestamp);
     setRefreshSignal((n) => {
-      if (id != null) setLastOrder({ id, date, seq: n + 1 });
+      setLastOrder({ id, date, seq: n + 1 });
       return n + 1;
     });
   }, []);
