@@ -57,7 +57,10 @@ export default function LiveFeed({
     [onEvent, maxItems],
   );
 
-  const { status } = useSSE<LiveEvent>(endpoint, { onMessage: handleMessage });
+  const { status } = useSSE<LiveEvent>(endpoint, {
+    onMessage: handleMessage,
+    events: ["connected", "order", "heartbeat", "error"],
+  });
   const statusStyle = STATUS_STYLES[status];
 
   return (

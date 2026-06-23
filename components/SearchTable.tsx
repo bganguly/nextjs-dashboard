@@ -16,6 +16,8 @@ interface SearchResponse {
   page: number;
   totalPages: number;
   total: number;
+  /** True when `total` is a capped estimate (broad result set). */
+  approximate?: boolean;
 }
 
 interface SearchTableProps {
@@ -27,6 +29,12 @@ interface SearchTableProps {
   filters?: OrderFilters;
   /** Called with each fetched page of rows (used to discover region codes). */
   onRows?: (rows: SearchRow[]) => void;
+  /** Id of the most recently created order; its row flashes when it appears. */
+  highlightId?: string | number;
+  /** Bumped per event so the same id can re-trigger the flash. */
+  highlightKey?: number;
+  /** Notified with the debounced query so the chart can narrow to the same set. */
+  onQueryChange?: (q: string) => void;
 }
 
 const SEARCH_DEBOUNCE_MS = 300;
@@ -118,6 +126,9 @@ export default function SearchTable({
   pageSize = 20,
   filters,
   onRows,
+  highlightId,
+  highlightKey,
+  onQueryChange,
 }: SearchTableProps) {
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -125,10 +136,13 @@ export default function SearchTable({
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [total, setTotal] = useState(0);
+  const [approximate, setApproximate] = useState(false);
   const [sort, setSort] = useState<string>("");
   const [dir, setDir] = useState<SortDir>("asc");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Row currently playing the new-order flash (cleared after the animation).
+  const [flashId, setFlashId] = useState<string | number | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -172,6 +186,7 @@ export default function SearchTable({
         setRows(data);
         setTotalPages(Math.max(1, json.totalPages ?? 1));
         setTotal(json.total ?? 0);
+        setApproximate(Boolean(json.approximate));
         onRowsRef.current?.(data);
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
@@ -179,6 +194,7 @@ export default function SearchTable({
         setRows([]);
         setTotalPages(1);
         setTotal(0);
+        setApproximate(false);
       } finally {
         setLoading(false);
       }
@@ -194,6 +210,12 @@ export default function SearchTable({
     }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [query]);
+
+  // Notify the parent of the active (debounced) query so the chart can narrow
+  // its aggregates to the same matching set.
+  useEffect(() => {
+    onQueryChange?.(debouncedQuery);
+  }, [debouncedQuery, onQueryChange]);
 
   // Single source of truth for fetching: reacts to query, page, sort, filters,
   // and the SSE refresh signal. Sorting/paging/filtering are all server-side.
@@ -217,6 +239,22 @@ export default function SearchTable({
   useEffect(() => {
     return () => abortRef.current?.abort();
   }, []);
+
+  // When a new order event arrives (highlightKey bumps), flash its row once it
+  // shows up in the freshly-fetched rows. The row may land a tick after the
+  // event, so this also re-checks whenever `rows` updates.
+  const lastFlashKey = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (highlightKey == null || highlightId == null) return;
+    if (highlightKey === lastFlashKey.current) return;
+    const present = rows.some((r) => String(r.id) === String(highlightId));
+    if (!present) return;
+    lastFlashKey.current = highlightKey;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setFlashId(highlightId);
+    const t = setTimeout(() => setFlashId(null), 1600);
+    return () => clearTimeout(t);
+  }, [rows, highlightKey, highlightId]);
 
   const toggleSort = useCallback(
     (sortKey: string) => {
@@ -260,6 +298,13 @@ export default function SearchTable({
         type="search"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            // Bypass the 300ms debounce — search immediately on Enter.
+            setDebouncedQuery(query);
+            setPage(1);
+          }
+        }}
         placeholder="Search records…"
         className="mb-3 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none placeholder:text-gray-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-100"
         aria-label="Search records"
@@ -271,8 +316,21 @@ export default function SearchTable({
             Search failed: {error}
           </div>
         ) : rows.length === 0 ? (
-          <div className="py-10 text-center text-sm text-gray-400">
-            {loading ? "Loading…" : "No results."}
+          <div
+            className="flex flex-col items-center justify-center gap-2 py-12 text-sm text-gray-400"
+            aria-live="polite"
+          >
+            {loading ? (
+              <>
+                <span
+                  aria-hidden
+                  className="h-6 w-6 animate-spin rounded-full border-2 border-gray-300 border-t-indigo-500 dark:border-gray-700 dark:border-t-indigo-400"
+                />
+                <span className="animate-pulse">Searching…</span>
+              </>
+            ) : (
+              "No results."
+            )}
           </div>
         ) : (
           <table className="w-full border-collapse text-sm">
@@ -331,7 +389,12 @@ export default function SearchTable({
                   key={(row.id as string | number | undefined) ?? i}
                   data-testid="search-result"
                   data-id={row.id as string | number | undefined}
-                  className="border-b border-gray-100 hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-800/50"
+                  className={cn(
+                    "border-b border-gray-100 hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-800/50",
+                    flashId != null &&
+                      String(row.id) === String(flashId) &&
+                      "row-insert",
+                  )}
                 >
                   {COLUMNS.map((col) => (
                     <td
@@ -353,7 +416,11 @@ export default function SearchTable({
 
       <footer className="mt-4 flex flex-wrap items-center justify-between gap-3">
         <span className="text-xs text-gray-500 dark:text-gray-400">
-          Page {page} of {totalPages} · {total} results
+          Page {page} of {totalPages} ·{" "}
+          {approximate
+            ? `${total.toLocaleString()}+`
+            : total.toLocaleString()}{" "}
+          results
         </span>
 
         {totalPages > 1 && (

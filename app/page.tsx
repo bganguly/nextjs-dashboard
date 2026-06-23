@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Chart from "@/components/Chart";
 import SearchTable, { type SearchRow } from "@/components/SearchTable";
-import LiveFeed from "@/components/LiveFeed";
+import LiveFeed, { type LiveEvent } from "@/components/LiveFeed";
 import ThemeToggle from "@/components/ThemeToggle";
 import FilterSidebar, {
   EMPTY_FILTERS,
@@ -40,13 +40,37 @@ function mergeRegions(
  * sends it to /api/orders. Region options have no dedicated endpoint, so they
  * are discovered from the order rows SearchTable reports via `onRows`.
  */
+/** Local date (YYYY-MM-DD) for an event's timestamp, matching the chart's
+ *  bucket keys. Falls back to "now" when the event carries no usable time. */
+function eventDay(raw: unknown): string | undefined {
+  const d = raw != null ? new Date(raw as string) : new Date();
+  if (Number.isNaN(d.getTime())) return undefined;
+  const tzMs = d.getTime() - d.getTimezoneOffset() * 60_000;
+  return new Date(tzMs).toISOString().slice(0, 10);
+}
+
 export default function Dashboard() {
   const [refreshSignal, setRefreshSignal] = useState(0);
   const [filters, setFilters] = useState<OrderFilters>(EMPTY_FILTERS);
   const [regionOptions, setRegionOptions] = useState<RegionOption[]>([]);
+  // Active search query, lifted from SearchTable so the chart can match it.
+  const [searchQuery, setSearchQuery] = useState("");
+  // Most recent order event, used to target the row + chart-bucket animations.
+  const [lastOrder, setLastOrder] = useState<{
+    id?: string | number;
+    date?: string;
+    seq: number;
+  } | null>(null);
 
-  const handleEvent = useCallback(() => {
-    setRefreshSignal((n) => n + 1);
+  const handleEvent = useCallback((event: LiveEvent) => {
+    // Only order events carry an id/total; ignore heartbeats/errors for
+    // animation targeting (they still refresh the views).
+    const id = event.id;
+    const date = eventDay(event.placedAt ?? event.timestamp);
+    setRefreshSignal((n) => {
+      if (id != null) setLastOrder({ id, date, seq: n + 1 });
+      return n + 1;
+    });
   }, []);
 
   // Prefer the full region list (with display names) from /api/regions. If that
@@ -83,7 +107,7 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-zinc-50 font-sans dark:bg-black">
-      <main className="mx-auto w-full max-w-[1600px] px-4 py-8 lg:px-6">
+      <main className="w-full px-5 py-8">
         <header className="mb-6 flex items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
@@ -104,11 +128,20 @@ export default function Dashboard() {
           <div className="min-w-0 flex-1">
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
               <div className="space-y-6 lg:col-span-2">
-                <Chart refreshSignal={refreshSignal} filters={filters} />
+                <Chart
+                  refreshSignal={refreshSignal}
+                  filters={filters}
+                  searchQuery={searchQuery}
+                  highlightDate={lastOrder?.date}
+                  highlightKey={lastOrder?.seq}
+                />
                 <SearchTable
                   refreshSignal={refreshSignal}
                   filters={filters}
                   onRows={handleRows}
+                  onQueryChange={setSearchQuery}
+                  highlightId={lastOrder?.id}
+                  highlightKey={lastOrder?.seq}
                 />
               </div>
               <div className="lg:col-span-1">

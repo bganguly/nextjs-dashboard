@@ -7,6 +7,7 @@ import {
   Brush,
   CartesianGrid,
   Legend,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -42,7 +43,7 @@ interface AggregatesResponse {
   data: RawAggregate[];
 }
 
-const DEFAULT_TOP_N = 8;
+const DEFAULT_TOP_N = 4;
 const OTHER_KEY = "Others";
 const OTHER_COLOR = "#94a3b8"; // slate-400
 
@@ -71,7 +72,7 @@ function computeCategoryTotals(data: RawAggregate[]): CategoryTotal[] {
   }
   return [...map.entries()]
     .map(([category, v]) => ({ category, revenue: v.revenue, orders: v.orders }))
-    .sort((a, b) => b.revenue - a.revenue);
+    .sort((a, b) => b.orders - a.orders);
 }
 
 /**
@@ -88,21 +89,15 @@ function buildBucket(
   for (const cat of topCategories) bucket[cat] = 0;
   if (withOther) bucket[OTHER_KEY] = 0;
   for (const [category, c] of Object.entries(entry.categories ?? {})) {
-    const revenue = c.totalRevenue ?? 0;
+    const value = c.totalOrders ?? 0;
     // Non-top categories (including any backend-provided "Other"/"Others") merge
     // into the single rolled-up "Others" series.
     const key = top.has(category) ? category : withOther ? OTHER_KEY : null;
     if (key === null) continue;
-    bucket[key] = (bucket[key] as number) + revenue;
+    bucket[key] = (bucket[key] as number) + value;
   }
   return bucket;
 }
-
-const currencyFmt = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-  maximumFractionDigits: 0,
-});
 
 /**
  * Abbreviate large revenue values for the Y axis: 25000 → "25k", 1_200_000 →
@@ -127,6 +122,12 @@ interface ChartProps {
   /** Sidebar filters; applied to the aggregates request so the chart and totals
    *  recompute for the same filtered set as the orders table. */
   filters?: OrderFilters;
+  /** Date (YYYY-MM-DD) of the most recent order; its bucket briefly pulses. */
+  highlightDate?: string;
+  /** Bumped per event so the same date can re-trigger the pulse. */
+  highlightKey?: number;
+  /** Active search query; narrows aggregates to the same matching orders. */
+  searchQuery?: string;
 }
 
 // Stable palette for stacked series. Cycled if there are more series than colors.
@@ -159,11 +160,16 @@ export default function Chart({
   endpoint = "/api/aggregates",
   topN = DEFAULT_TOP_N,
   filters,
+  highlightDate,
+  highlightKey,
+  searchQuery,
 }: ChartProps) {
   const [rawData, setRawData] = useState<RawAggregate[]>([]);
   const [range, setRange] = useState(defaultRange);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Date whose bar is currently pulsing after a new order (transient).
+  const [pulseDate, setPulseDate] = useState<string | null>(null);
 
   // Abort in-flight requests so rapid drags don't race each other.
   const abortRef = useRef<AbortController | null>(null);
@@ -177,6 +183,8 @@ export default function Chart({
 
       setLoading(true);
       setError(null);
+      setRawData([]); // clear stale bars immediately so the chart reacts in
+      // lockstep with the orders list instead of showing ghost data
       try {
         // A date filter, if set, overrides the brush/default range; the other
         // filters (status, region, total) narrow the same set as the table.
@@ -187,6 +195,8 @@ export default function Chart({
         params.set("topCategories", String(topN));
         // Sets status/regionCode/minTotal/maxTotal (and from/to if filtered).
         appendFilterParams(params, filters);
+        // Narrow to the active text search, matching the orders table.
+        if (searchQuery) params.set("q", searchQuery);
         const res = await fetch(`${endpoint}?${params}`, {
           signal: controller.signal,
         });
@@ -200,7 +210,7 @@ export default function Chart({
         setLoading(false);
       }
     },
-    [endpoint, topN, filters],
+    [endpoint, topN, filters, searchQuery],
   );
 
   // Initial load + refetch whenever the SSE refresh signal changes.
@@ -237,6 +247,32 @@ export default function Chart({
     [rawData],
   );
 
+  // Total matched orders across the loaded range — each order falls in exactly
+  // one category, so summing per-category counts per day gives the day's order
+  // count. Shown in the header to confirm the chart IS filtering.
+  const matchedOrders = useMemo(
+    () =>
+      rawData.reduce((sum, day) => {
+        const dayTotal = Object.values(day.categories ?? {}).reduce(
+          (s, c) => s + (c.totalOrders ?? 0),
+          0,
+        );
+        return sum + dayTotal;
+      }, 0),
+    [rawData],
+  );
+
+  // Whether any search/filter is narrowing the set (drives the matched count).
+  const isFiltered = Boolean(
+    searchQuery ||
+      filters?.status?.length ||
+      filters?.regionCodes?.length ||
+      filters?.from ||
+      filters?.to ||
+      filters?.totalMin ||
+      filters?.totalMax,
+  );
+
   // Stack only the top N *real* categories; everything else (including any
   // backend-provided "Other"/"Others" pseudo-category) rolls into a single
   // "Others" series.
@@ -255,9 +291,45 @@ export default function Chart({
     [rawData, topCategories, withOther],
   );
 
+  // Pulse the new order's bucket once its date is present in the loaded data.
+  const lastPulseKey = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (highlightKey == null || !highlightDate) return;
+    if (highlightKey === lastPulseKey.current) return;
+    if (!buckets.some((b) => b.date === highlightDate)) return;
+    lastPulseKey.current = highlightKey;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPulseDate(highlightDate);
+    const t = setTimeout(() => setPulseDate(null), 2700);
+    return () => clearTimeout(t);
+  }, [buckets, highlightKey, highlightDate]);
+
+  // All displayed segments (top categories + a single rolled-up "Others")
+  // ranked by revenue desc. "Others" participates in this sort, so the largest
+  // segment — whatever it is — leads the order.
+  const seriesRanked = useMemo(() => {
+    const topSet = new Set(topCategories);
+    const entries = topCategories.map((cat) => ({
+      key: cat,
+      orders: categoryTotals.find((c) => c.category === cat)?.orders ?? 0,
+    }));
+    if (withOther) {
+      const othersOrders = categoryTotals
+        .filter((c) => !topSet.has(c.category))
+        .reduce((sum, c) => sum + c.orders, 0);
+      entries.push({ key: OTHER_KEY, orders: othersOrders });
+    }
+    return entries.sort((a, b) => b.orders - a.orders);
+  }, [categoryTotals, topCategories, withOther]);
+
+  // Stack/legend order: ranked top categories only — "Others" is intentionally
+  // excluded from the bars and legend (it still appears in the totals row).
+  // recharts draws the first <Bar> at the BOTTOM, so largest-first puts the
+  // largest at the bottom and the smallest on top; the legend reads the same
+  // order left-to-right.
   const seriesKeys = useMemo(
-    () => (withOther ? [...topCategories, OTHER_KEY] : topCategories),
-    [topCategories, withOther],
+    () => seriesRanked.filter((s) => s.key !== OTHER_KEY).map((s) => s.key),
+    [seriesRanked],
   );
 
   // Color per top category (by rank), with a fixed neutral for "Other".
@@ -269,22 +341,16 @@ export default function Chart({
   const colorFor = (key: string) =>
     key === OTHER_KEY ? OTHER_COLOR : (colorByCategory.get(key) ?? OTHER_COLOR);
 
-  // Revenue per displayed series (top categories + a single rolled-up "Others"),
-  // sorted desc — mirrors exactly what the chart stacks. Drives the totals row.
+  // Totals row: top categories first in legend order (revenue desc), then
+  // "Others" always pinned last regardless of its size.
   const displayTotals = useMemo(() => {
-    const topSet = new Set(topCategories);
-    const rows = topCategories.map((cat) => ({
-      category: cat,
-      revenue: categoryTotals.find((c) => c.category === cat)?.revenue ?? 0,
-    }));
-    if (withOther) {
-      const othersRevenue = categoryTotals
-        .filter((c) => !topSet.has(c.category))
-        .reduce((sum, c) => sum + c.revenue, 0);
-      rows.push({ category: OTHER_KEY, revenue: othersRevenue });
-    }
-    return rows.sort((a, b) => b.revenue - a.revenue);
-  }, [categoryTotals, topCategories, withOther]);
+    const tops = seriesRanked
+      .filter((s) => s.key !== OTHER_KEY)
+      .map((s) => ({ category: s.key, orders: s.orders }));
+    const others = seriesRanked.find((s) => s.key === OTHER_KEY);
+    if (others) tops.push({ category: others.key, orders: others.orders });
+    return tops;
+  }, [seriesRanked]);
 
   // Dragging the Brush selects a date window; debounce then refetch that window.
   const handleBrushChange = useCallback(
@@ -324,6 +390,11 @@ export default function Chart({
             {range.from} → {range.to}
             <span className="ml-2 text-gray-400">drag the slider to rescan</span>
           </p>
+          {isFiltered && matchedOrders > 0 && (
+            <p className="text-xs text-indigo-500">
+              {matchedOrders.toLocaleString()} matched orders
+            </p>
+          )}
         </div>
         {loading && (
           <span className="text-xs text-indigo-500" aria-live="polite">
@@ -338,7 +409,7 @@ export default function Chart({
         </div>
       ) : buckets.length === 0 ? (
         <div className="flex h-72 items-center justify-center text-sm text-gray-400">
-          No data for this range.
+          {loading ? "Loading…" : "No data for this range."}
         </div>
       ) : (
         <>
@@ -367,9 +438,47 @@ export default function Chart({
               labelStyle={{ color: tooltipStyle.color }}
               itemStyle={{ color: tooltipStyle.color }}
               cursor={{ fill: isDark ? "#ffffff10" : "#00000008" }}
-              formatter={(v) => currencyFmt.format(Number(v))}
+              formatter={(v) => Number(v).toLocaleString()}
             />
-            <Legend wrapperStyle={{ fontSize: 12, color: axisColor }} />
+            <Legend
+              wrapperStyle={{ fontSize: 12 }}
+              // Render straight from `seriesKeys` so the legend reads left-to-
+              // right in the exact same order as the totals row (both ranked),
+              // instead of whatever order recharts would pick internally.
+              content={() => (
+                <ul className="flex flex-wrap justify-center gap-x-4 gap-y-1 pt-2">
+                  {seriesKeys.map((key) => (
+                    <li
+                      key={key}
+                      className="inline-flex items-center gap-1.5 text-xs"
+                      style={{ color: axisColor }}
+                    >
+                      <span
+                        aria-hidden
+                        className="h-2.5 w-2.5 shrink-0 rounded-sm"
+                        style={{ backgroundColor: colorFor(key) }}
+                      />
+                      {key}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            />
+            {pulseDate && (
+              <ReferenceLine
+                x={pulseDate}
+                stroke="#6366f1"
+                strokeWidth={2}
+                className="bucket-pulse"
+                ifOverflow="extendDomain"
+                label={{
+                  value: "＋ new",
+                  position: "top",
+                  fill: "#6366f1",
+                  fontSize: 11,
+                }}
+              />
+            )}
             {seriesKeys.map((key, i) => (
               <Bar
                 key={key}
@@ -400,13 +509,13 @@ export default function Chart({
           </p>
           <div
             data-testid="category-totals"
-            className="flex flex-wrap items-center gap-x-4 gap-y-2"
+            className="flex flex-nowrap items-center gap-x-4 overflow-x-auto"
           >
             {displayTotals.map((ct) => (
               <span
                 key={ct.category}
-                className="inline-flex items-center gap-1.5 text-xs"
-                title={currencyFmt.format(ct.revenue)}
+                className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs"
+                title={ct.orders.toLocaleString()}
               >
                 <span
                   aria-hidden
@@ -417,7 +526,7 @@ export default function Chart({
                   {ct.category}
                 </span>
                 <span className="font-medium tabular-nums text-gray-900 dark:text-gray-100">
-                  ${compactNumber(ct.revenue)}
+                  {ct.orders.toLocaleString()}
                 </span>
               </span>
             ))}
