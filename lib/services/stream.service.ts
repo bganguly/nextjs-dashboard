@@ -31,7 +31,7 @@ export async function subscribeToOrders(
     throw new AppError("INTERNAL", err instanceof Error ? err.message : "invalid Postgres URL");
   }
 
-  const client = new Client({ connectionString });
+  const client = new Client({ connectionString, ssl: { rejectUnauthorized: false } });
 
   const close = async () => {
     try {
