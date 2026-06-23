@@ -410,11 +410,24 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
         },
       },
     });
+    let categorySlug: string | undefined;
+    if (input.items.length > 0) {
+      try {
+        const product = await prisma.product.findUnique({
+          where: { id: input.items[0].productId },
+          include: { category: true },
+        });
+        categorySlug = product?.category?.name ?? undefined;
+      } catch {
+        // non-fatal — SSE event fires without the slug
+      }
+    }
     publishOrderEvent({
       id: created.id,
       total: Number(created.total),
       customerId: created.customerId,
       placedAt: created.placedAt.toISOString(),
+      categorySlug,
     }).catch(() => {});
     updateDailySummary(created.id).catch(() => {});
     return {

@@ -276,6 +276,7 @@ export interface OrderNotification {
   customerEmail?: string;
   regionCode?: string;
   placedAt: string;
+  categorySlug?: string;
 }
 
 export type StreamEventName = "connected" | "order" | "heartbeat" | "error";
