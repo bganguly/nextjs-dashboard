@@ -1,36 +1,63 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Dashboard Workspace
 
-## Getting Started
+This repository uses Git worktrees for the main dashboard pieces. To demo the
+full flow, run the services from sibling directories under `grouped-projects`.
 
-First, run the development server:
+## Pieces
+
+| Piece | Directory | Branch / repo | Port | Purpose |
+| --- | --- | --- | --- | --- |
+| Backend API | `../wt-backend` | `feature/service-layer` | `3004` | Orders, aggregates, SSE stream |
+| Dashboard UI | `../wt-frontend` | `feature/frontend-ui` | `3003` | Search table, chart, filters, live feed |
+| Test suite | `../wt-testing` | `feature/testing-setup` | n/a | Playwright coverage/perf checks |
+| Quick order | `../wt-quickorder` | standalone `main` repo | `3005` | Create an order and trigger dashboard reload |
+
+Current demo commits:
+
+- `wt-backend`: `5629796 list+charts paint acceptable`
+- `wt-frontend`: `54668a2 list+charts paint acceptable`
+- `wt-testing`: `64ffae3 list+charts paint acceptable`
+- `wt-quickorder`: `60e4d47 list+charts paint acceptable`
+
+## Run
+
+From separate terminals:
 
 ```bash
+cd ../wt-backend
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+```bash
+cd ../wt-frontend
+npm run dev
+```
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+cd ../wt-quickorder
+npm run dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Open:
 
-## Learn More
+- Dashboard: http://localhost:3003
+- Quick order: http://localhost:3005
 
-To learn more about Next.js, take a look at the following resources:
+`wt-frontend` and `wt-quickorder` proxy `/api/*` to the backend at
+`http://localhost:3004` by default. Override with `BACKEND_URL` if needed.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Verify
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+cd ../wt-backend && npm run lint
+cd ../wt-frontend && npm run lint
+cd ../wt-quickorder && npm run lint
+```
 
-## Deploy on Vercel
+Playwright:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```bash
+cd ../wt-testing
+BASE_URL=http://localhost:3003 BACKEND_URL=http://localhost:3004 npx playwright test
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
