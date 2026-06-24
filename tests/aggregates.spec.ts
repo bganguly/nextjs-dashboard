@@ -80,6 +80,41 @@ async function dragRange(page: Page): Promise<boolean> {
 }
 
 test.describe("aggregates", () => {
+  test("lowercase status filters match list and chart aggregates", async ({ request }) => {
+    const params = new URLSearchParams({
+      status: "shipped,refunded",
+      regionCode: "R42",
+      from: "2026-06-22",
+      to: "2026-06-22",
+      q: "ito",
+      pageSize: "5",
+    });
+
+    const [ordersRes, aggregatesRes] = await Promise.all([
+      request.get(`/api/orders?${params.toString()}`),
+      request.get(`/api/aggregates?${params.toString()}`),
+    ]);
+
+    expect(ordersRes.ok(), await ordersRes.text()).toBeTruthy();
+    expect(aggregatesRes.ok(), await aggregatesRes.text()).toBeTruthy();
+
+    const orders = await ordersRes.json();
+    const aggregates = await aggregatesRes.json();
+    const aggregateTotal = aggregates.data.reduce(
+      (sum: number, day: { totals?: { totalOrders?: number } }) =>
+        sum + (day.totals?.totalOrders ?? 0),
+      0,
+    );
+
+    expect(orders.total).toBeGreaterThan(0);
+    expect(aggregateTotal).toBe(orders.total);
+    expect(
+      orders.data.every((row: { status: string; region?: { code?: string } }) =>
+        ["SHIPPED", "REFUNDED"].includes(row.status) && row.region?.code === "R42",
+      ),
+    ).toBeTruthy();
+  });
+
   test("dragging the date range updates the chart data", async ({ page }) => {
     await page.goto("/");
 
