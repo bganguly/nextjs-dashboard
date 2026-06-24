@@ -614,12 +614,21 @@ function rowsToDailyAggregates(rows: AggRow[], topN: number): DailyAggregate[] {
     const totalOrders = Number(r.total_orders);
     const totalRevenue = Number(r.total_revenue ?? 0);
     const totalItems = Number(r.total_items);
-    const cat: CategoryAggregate = {
-      totalOrders,
-      totalRevenue,
-      totalItems,
-      avgOrderValue: totalOrders > 0 ? totalRevenue / totalOrders : 0,
-    };
+    const existing = entry.categories[r.category];
+    const cat: CategoryAggregate = existing
+      ? {
+          totalOrders: existing.totalOrders + totalOrders,
+          totalRevenue: existing.totalRevenue + totalRevenue,
+          totalItems: existing.totalItems + totalItems,
+          avgOrderValue: 0,
+        }
+      : {
+          totalOrders,
+          totalRevenue,
+          totalItems,
+          avgOrderValue: 0,
+        };
+    cat.avgOrderValue = cat.totalOrders > 0 ? cat.totalRevenue / cat.totalOrders : 0;
     entry.categories[r.category] = cat;
     entry.totals.totalOrders += totalOrders;
     entry.totals.totalRevenue += totalRevenue;
@@ -630,13 +639,18 @@ function rowsToDailyAggregates(rows: AggRow[], topN: number): DailyAggregate[] {
 }
 
 function capToTopCategories(day: DailyAggregate, topN: number): DailyAggregate {
-  const entries = Object.entries(day.categories).sort(
-    ([, a], [, b]) => b.totalRevenue - a.totalRevenue,
-  );
+  const entries = Object.entries(day.categories);
   if (entries.length <= topN) return day;
 
-  const top = entries.slice(0, topN);
-  const rest = entries.slice(topN);
+  const existingOther = day.categories[OTHER_BUCKET];
+  const realEntries = entries
+    .filter(([category]) => category !== OTHER_BUCKET)
+    .sort(
+    ([, a], [, b]) => b.totalRevenue - a.totalRevenue,
+    );
+
+  const top = realEntries.slice(0, topN);
+  const rest = realEntries.slice(topN);
 
   const other = rest.reduce<CategoryAggregate>(
     (acc, [, c]) => ({
@@ -645,12 +659,14 @@ function capToTopCategories(day: DailyAggregate, topN: number): DailyAggregate {
       totalItems: acc.totalItems + c.totalItems,
       avgOrderValue: 0,
     }),
-    { totalOrders: 0, totalRevenue: 0, totalItems: 0, avgOrderValue: 0 },
+    existingOther ?? { totalOrders: 0, totalRevenue: 0, totalItems: 0, avgOrderValue: 0 },
   );
   other.avgOrderValue = other.totalOrders > 0 ? other.totalRevenue / other.totalOrders : 0;
 
   const categories: Record<string, CategoryAggregate> = Object.fromEntries(top);
-  categories[OTHER_BUCKET] = other;
+  if (other.totalOrders > 0 || existingOther) {
+    categories[OTHER_BUCKET] = other;
+  }
   return { ...day, categories };
 }
 
