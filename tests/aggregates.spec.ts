@@ -120,6 +120,38 @@ test.describe("aggregates", () => {
     expect(allDaysReconcile).toBeTruthy();
   });
 
+  test("from-only chart renders rolled-up other buckets", async ({ page, request }) => {
+    const params = new URLSearchParams({
+      q: "ito",
+      from: "2026-06-22",
+    });
+    const aggregatesRes = await request.get(`/api/aggregates?${params.toString()}`);
+    expect(aggregatesRes.ok(), await aggregatesRes.text()).toBeTruthy();
+    const aggregates = await aggregatesRes.json();
+    const daysWithOther = aggregates.data.filter(
+      (day: { categories?: Record<string, unknown> }) =>
+        Object.prototype.hasOwnProperty.call(day.categories ?? {}, "Others"),
+    ).length;
+
+    expect(daysWithOther).toBeGreaterThan(0);
+
+    await page.goto("/");
+    await page.getByTestId("search-input").fill("ito");
+    await page.getByTestId("search-input").press("Enter");
+    await page.locator("input[type='date']").first().fill("2026-06-22");
+
+    await expect
+      .poll(
+        async () =>
+          page.locator("[data-testid='chart-bar'][data-category='Others']").count(),
+        {
+          message: "rolled-up Others buckets did not render in the chart",
+          timeout: 10_000,
+        },
+      )
+      .toBeGreaterThanOrEqual(daysWithOther);
+  });
+
   test("lowercase status filters match list and chart aggregates", async ({ request }) => {
     const params = new URLSearchParams({
       status: "shipped,refunded",
