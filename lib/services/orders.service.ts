@@ -223,6 +223,12 @@ function parseList(csv: string | null | undefined): string[] {
     .filter((s) => s.length > 0);
 }
 
+export function normalizeStatusList(csv: string | null | undefined): OrderStatus[] {
+  return parseList(csv)
+    .map((s) => s.toUpperCase())
+    .filter((s): s is OrderStatus => (ORDER_STATUSES as readonly string[]).includes(s));
+}
+
 function parseDateBoundary(value: string | null | undefined, edge: "start" | "end"): Date | null {
   if (value == null || value === "") return null;
   const d = new Date(value);
@@ -247,9 +253,7 @@ function parseNumber(value: number | null | undefined, name: string): number | n
 }
 
 export async function resolveFilters(input: OrderFilterInput): Promise<ResolvedFilters> {
-  const statuses = parseList(input.status).filter((s): s is OrderStatus =>
-    (ORDER_STATUSES as readonly string[]).includes(s),
-  );
+  const statuses = normalizeStatusList(input.status);
 
   const regionCodes = parseList(input.regionCode);
   let regionIds: number[] | null = null;

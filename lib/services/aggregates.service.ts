@@ -8,6 +8,7 @@ import {
   getNotesHaveMatches,
   getTextProbe,
   getTokenProbe,
+  normalizeStatusList,
   resolveFilters,
 } from "./orders.service";
 
@@ -124,7 +125,7 @@ async function customerTokenSummaryPath(input: AggregateQueryInput): Promise<Agg
   const tokenProbe = await getTokenProbe(token);
   if (!tokenProbe.tokenOrderReady) return null;
 
-  const status = parseCsv(input.status);
+  const status = normalizeStatusList(input.status);
   const regionCodes = parseCsv(input.regionCode);
 
   if (status.length === 0 && regionCodes.length === 0) {
@@ -378,7 +379,7 @@ async function customerSummaryPath(input: AggregateQueryInput): Promise<AggRow[]
   if (custRows.length === 0 || custRows.length > AGG_TEXT_MATCH_CAP) return null;
 
   const customerIds = custRows.map((r) => r.id);
-  const status = parseCsv(input.status);
+  const status = normalizeStatusList(input.status);
   const regionCodes = parseCsv(input.regionCode);
 
   const conds: Prisma.Sql[] = [
@@ -407,7 +408,7 @@ async function filterSummaryPath(input: AggregateQueryInput): Promise<AggRow[] |
   const noQ = !input.q || input.q.trim() === "";
   if (!noQ || input.minTotal != null || input.maxTotal != null) return null;
 
-  const status = parseCsv(input.status);
+  const status = normalizeStatusList(input.status);
   if (status.length === 0) return null;
 
   const regionCodes = parseCsv(input.regionCode);
@@ -456,7 +457,7 @@ async function factFilterPath(input: AggregateQueryInput): Promise<AggRow[] | nu
   const hasTotalFilter = input.minTotal != null || input.maxTotal != null;
   if (!hasTotalFilter) return null;
 
-  const status = parseCsv(input.status);
+  const status = normalizeStatusList(input.status);
   const regionCodes = parseCsv(input.regionCode);
   const conds: Prisma.Sql[] = [
     Prisma.sql`f.date >= ${input.from}::date`,
