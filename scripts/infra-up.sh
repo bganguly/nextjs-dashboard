@@ -11,9 +11,23 @@ trap 'print_recovery_hint' INT
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INFRA_DIR="$ROOT_DIR/infra"
+START_TS="$(date +%s)"
 
+elapsed() {
+  local now
+  now="$(date +%s)"
+  printf '%ss' "$((now - START_TS))"
+}
+
+step() {
+  printf '\n[%s] %s\n' "$(elapsed)" "$1"
+  printf '    ETA: %s\n' "$2"
+}
+
+step "1/6 Checking local dependencies: terraform and aws CLI." "< 1 min"
 "$ROOT_DIR/scripts/bootstrap-deps.sh" terraform aws
 
+step "2/6 Detecting your current public IP for the RDS security group." "< 10 sec"
 MY_IP="$(curl -fsSL https://checkip.amazonaws.com || true)"
 if [[ -n "$MY_IP" ]]; then
   ALLOWED_CIDR="${MY_IP}/32"
@@ -22,12 +36,15 @@ else
 fi
 echo "Locking DB access to allowed_cidr=$ALLOWED_CIDR"
 
-printf '\n==> Provisioning RDS Postgres (VPC + subnets + IGW + SG + db). Usually ~5-10 min.\n\n'
-
 cd "$INFRA_DIR"
+step "3/6 Initializing Terraform providers/state." "< 1 min"
 terraform init -input=false
+
+step "4/6 Applying AWS infra: VPC, subnets, route table, security group, and RDS Postgres." "5-10 min for a new RDS instance; usually < 2 min when already created"
+echo "    Terraform is idempotent: it creates missing pieces and leaves healthy existing pieces alone."
 terraform apply -auto-approve -input=false -var "allowed_cidr=$ALLOWED_CIDR"
 
+step "5/6 Reading Terraform outputs and writing .env.rds." "< 10 sec"
 DATABASE_URL="$(terraform output -raw database_url)"
 DB_HOST="$(terraform output -raw db_endpoint)"
 DB_PORT="$(terraform output -raw db_port)"
@@ -44,12 +61,27 @@ PGUSER=$DB_USER
 EOF
 
 printf '\nWrote %s (DATABASE_URL + PG* vars).\n' "$ROOT_DIR/.env.rds"
+step "6/6 Checking whether Quick Order is already running on :3005." "< 10 sec"
+if curl -fsS --max-time 2 http://localhost:3005 >/dev/null 2>&1; then
+  echo "Quick Order is already active at http://localhost:3005."
+else
+  cat <<'QUICKORDER'
+Quick Order is not responding on :3005.
+Start it in a separate terminal:
+  cd ../wt-quickorder
+  npm install
+  npm run dev
+
+Then open http://localhost:3005.
+QUICKORDER
+fi
+
 cat <<'NEXT'
 
 Next steps:
-  source .env.rds            # load DATABASE_URL + PG* into your shell
-  (in ../wt-backend) DATABASE_URL="$DATABASE_URL" npx prisma db push   # create schema on RDS
-  re-seed, then start the backend with DATABASE_URL pointing at RDS.
+  source .env.rds
+  DATABASE_URL="$DATABASE_URL" npx prisma db push
+  DATABASE_URL="$DATABASE_URL" npm run dev
 
 Tear down (stops billing):  ./scripts/infra-down.sh
 NEXT
