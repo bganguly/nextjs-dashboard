@@ -41,3 +41,20 @@ yarn-error.log*
 next-env.d.ts
 
 /app/generated/prisma
+
+# playwright
+/test-results/
+/playwright-report/
+
+# bot runtime artifacts
+/bot.log
+/scripts/bot.pid
+/scripts/.bot-state.json
+/scripts/.bot-inbox.log
+
+# terraform / rds infra
+/infra/.terraform/
+/infra/*.tfstate
+/infra/*.tfstate.*
+/.env.rds
+/scripts/.notify-mode.json
