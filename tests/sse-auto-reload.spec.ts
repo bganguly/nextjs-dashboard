@@ -30,6 +30,13 @@ async function postOrder(): Promise<number> {
 
 test.describe("SSE auto-reload", () => {
   test("new order appears in list without manual refresh", async ({ page }) => {
+    let aggregateRefreshes = 0;
+    page.on("response", (res) => {
+      if (res.url().includes("/api/aggregates") && res.status() === 200) {
+        aggregateRefreshes += 1;
+      }
+    });
+
     // 1. Load dashboard — capture SSE connection status
     await page.goto("/");
     // "networkidle" never fires when an SSE connection is open (always in-flight); use "load" instead
@@ -57,6 +64,7 @@ test.describe("SSE auto-reload", () => {
     const firstIdBefore = await firstRow.getAttribute("data-order-id")
       ?? await firstRow.locator("td").first().textContent();
     expect(firstIdBefore).toBeTruthy();
+    const aggregateRefreshesBefore = aggregateRefreshes;
 
     // 3. POST a new order directly to the backend (bypassing the Quick Order UI)
     const newId = await postOrder();
@@ -67,6 +75,13 @@ test.describe("SSE auto-reload", () => {
     await expect(
       page.locator(`text=${newId}`).first(),
     ).toBeVisible({ timeout: TIMEOUT });
+
+    await expect
+      .poll(() => aggregateRefreshes, {
+        message: "chart aggregates did not refresh after the SSE order event",
+        timeout: TIMEOUT,
+      })
+      .toBeGreaterThan(aggregateRefreshesBefore);
   });
 
   test("SSE stream delivers event: order after POST", async ({ page }) => {
