@@ -58,7 +58,7 @@ test.describe("smoke", () => {
 
     // Fall back to verifying the stream over the wire, including a direct
     // EventSource probe if the page itself didn't open one.
-    let res = await eventStream;
+    const res = await eventStream;
     if (!res) {
       const opened = await page.evaluate(
         (path) =>

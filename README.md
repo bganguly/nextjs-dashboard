@@ -1,63 +1,47 @@
-# Dashboard Workspace
+# Dashboard
 
-This repository uses Git worktrees for the main dashboard pieces. To demo the
-full flow, run the services from sibling directories under `grouped-projects`.
+This repo now contains the merged dashboard stack on `main`: backend API routes,
+the dashboard UI, and the Playwright/perf test setup.
 
-## Pieces
-
-| Piece | Directory | Branch / repo | Port | Purpose |
-| --- | --- | --- | --- | --- |
-| Backend API | `../wt-backend` | `feature/service-layer` | `3004` | Orders, aggregates, SSE stream |
-| Dashboard UI | `../wt-frontend` | `feature/frontend-ui` | `3003` | Search table, chart, filters, live feed |
-| Test suite | `../wt-testing` | `feature/testing-setup` | n/a | Playwright coverage/perf checks |
-| Quick order | `../wt-quickorder` | standalone `main` repo | `3005` | Create an order and trigger dashboard reload |
-
-Current demo commits:
-
-- `wt-backend`: `5629796 list+charts paint acceptable`
-- `wt-frontend`: `54668a2 list+charts paint acceptable`
-- `wt-testing`: `64ffae3 list+charts paint acceptable`
-- `wt-quickorder`: `60e4d47 list+charts paint acceptable`
-
-## Run
-
-From separate terminals:
+## Run the dashboard
 
 ```bash
-cd ../wt-backend
+npm install
 npm run dev
 ```
 
-```bash
-cd ../wt-frontend
-npm run dev
-```
+Open http://localhost:3004.
+
+The dashboard serves the UI and API from the same Next app. If you deliberately
+run the API somewhere else, set `BACKEND_URL` and the app will proxy `/api/*` to
+that backend.
+
+## Run quick order
+
+Quick order is a separate repo pushed to `bganguly/nextjs-websocket`.
 
 ```bash
 cd ../wt-quickorder
+npm install
 npm run dev
 ```
 
-Open:
-
-- Dashboard: http://localhost:3003
-- Quick order: http://localhost:3005
-
-`wt-frontend` and `wt-quickorder` proxy `/api/*` to the backend at
-`http://localhost:3004` by default. Override with `BACKEND_URL` if needed.
+Open http://localhost:3005.
 
 ## Verify
 
 ```bash
-cd ../wt-backend && npm run lint
-cd ../wt-frontend && npm run lint
-cd ../wt-quickorder && npm run lint
+npm run lint
+npx playwright test
 ```
 
-Playwright:
+Playwright uses `BASE_URL=http://localhost:3004` by default.
 
-```bash
-cd ../wt-testing
-BASE_URL=http://localhost:3003 BACKEND_URL=http://localhost:3004 npx playwright test
-```
+## Merged dashboard branches
 
+- `feature/service-layer`
+- `feature/frontend-ui`
+- `feature/testing-setup`
+
+The old worktree branches are still useful as history, but a developer can demo
+the full dashboard functionality from this repo's `main`.

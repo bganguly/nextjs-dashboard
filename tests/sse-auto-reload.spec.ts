@@ -56,6 +56,7 @@ test.describe("SSE auto-reload", () => {
     await expect(firstRow).toBeVisible({ timeout: 10_000 });
     const firstIdBefore = await firstRow.getAttribute("data-order-id")
       ?? await firstRow.locator("td").first().textContent();
+    expect(firstIdBefore).toBeTruthy();
 
     // 3. POST a new order directly to the backend (bypassing the Quick Order UI)
     const newId = await postOrder();
