@@ -10,6 +10,7 @@ import {
   getTokenProbe,
   normalizeStatusList,
   resolveFilters,
+  todayDateString,
 } from "./orders.service";
 
 const DEFAULT_TOP_CATEGORIES = 5;
@@ -46,25 +47,30 @@ function searchToken(q: string | null | undefined): string | null {
 }
 
 export async function getDailyAggregates(input: AggregateQueryInput): Promise<DailyAggregate[]> {
-  if (!input.from || !input.to) {
+  const query = {
+    ...input,
+    to: input.to || (input.from ? todayDateString() : input.to),
+  };
+
+  if (!query.from || !query.to) {
     throw new AppError("BAD_REQUEST", "from and to dates are required (YYYY-MM-DD)");
   }
 
   const topN =
-    input.topCategories != null && input.topCategories > 0
-      ? Math.trunc(input.topCategories)
+    query.topCategories != null && query.topCategories > 0
+      ? Math.trunc(query.topCategories)
       : DEFAULT_TOP_CATEGORIES;
 
   try {
-    const rows = canUseDailySummary(input)
-      ? await fastPath(input)
-      : (await customerTokenSummaryPath(input)) ??
-        ((await noTextMatches(input)) ? [] : null) ??
-          (await noteOnlySummaryPath(input)) ??
-          (await customerSummaryPath(input)) ??
-          (await filterSummaryPath(input)) ??
-          (await factFilterPath(input)) ??
-          (await slowPath(input));
+    const rows = canUseDailySummary(query)
+      ? await fastPath(query)
+      : (await customerTokenSummaryPath(query)) ??
+        ((await noTextMatches(query)) ? [] : null) ??
+          (await noteOnlySummaryPath(query)) ??
+          (await customerSummaryPath(query)) ??
+          (await filterSummaryPath(query)) ??
+          (await factFilterPath(query)) ??
+          (await slowPath(query));
     return rowsToDailyAggregates(rows, topN);
   } catch (err) {
     mapDbError(err, "getDailyAggregates");

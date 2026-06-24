@@ -229,6 +229,14 @@ export function normalizeStatusList(csv: string | null | undefined): OrderStatus
     .filter((s): s is OrderStatus => (ORDER_STATUSES as readonly string[]).includes(s));
 }
 
+export function todayDateString(): string {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const dd = String(now.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 function parseDateBoundary(value: string | null | undefined, edge: "start" | "end"): Date | null {
   if (value == null || value === "") return null;
   const d = new Date(value);
@@ -266,7 +274,8 @@ export async function resolveFilters(input: OrderFilterInput): Promise<ResolvedF
   }
 
   const from = parseDateBoundary(input.from, "start");
-  const to = parseDateBoundary(input.to, "end");
+  const toInput = input.to || (input.from ? todayDateString() : input.to);
+  const to = parseDateBoundary(toInput, "end");
   const minTotal = parseNumber(input.minTotal, "minTotal");
   const maxTotal = parseNumber(input.maxTotal, "maxTotal");
 
