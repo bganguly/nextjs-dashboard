@@ -4,6 +4,13 @@ Start by bringing the AWS database infra up. The app expects a Postgres
 `DATABASE_URL`, and `infra-up.sh` is the standard way to create, repair, or find
 that database.
 
+Important: `infra-up.sh` only creates or reconnects the AWS infrastructure. It
+does not populate millions of orders or rebuild the token/read-model tables. For
+the full demo experience, use an already-populated database. If the existing RDS
+database is intact, bringing infra up and starting `3004` should make the
+dashboard work immediately. Quick Order on `3005` is the only separate app that
+may still need to be started.
+
 ## 1. Bring Infra Up
 
 ```bash
@@ -28,6 +35,14 @@ Typical timing:
 - New RDS instance: 5-10 minutes
 - Infra destroy: 5-10 minutes
 
+Data timing:
+
+- Existing populated RDS database: no backfill should be needed
+- Fresh empty RDS database: schema creation is quick, but large seed/read-model
+  population can take hours
+- Token summaries, category facts, and aggregate read models are required for
+  the sub-second search/chart behavior demonstrated here
+
 ## 2. Find `DATABASE_URL`
 
 After infra is up, the generated value is stored in `.env.rds`.
@@ -50,18 +65,32 @@ If `.env.rds` is missing, run:
 ./scripts/infra-up.sh
 ```
 
-## 3. Prepare The Database
+## 3. Prepare Or Reuse The Database
 
 ```bash
 npm install
 DATABASE_URL="$DATABASE_URL" npx prisma db push
 ```
 
-Seed data when needed:
+For an already-populated RDS database, stop here and start the dashboard.
+
+Only seed a new empty database when you intentionally want to rebuild the demo
+data from scratch. This is not a quick infra step; large data and read-model
+population can take hours.
 
 ```bash
 DATABASE_URL="$DATABASE_URL" npx tsx scripts/seed.ts
 ```
+
+For very large local/RDS data sets, the repo also contains lower-level SQL and
+backfill helpers such as:
+
+```bash
+psql "$DATABASE_URL" -v orders=4000000 -f scripts/seed-large.sql
+DATABASE_URL="$DATABASE_URL" npx tsx scripts/backfill-visible-token-category-summary.ts
+```
+
+Use those only when rebuilding the large benchmark dataset deliberately.
 
 ## 4. Start Dashboard
 
