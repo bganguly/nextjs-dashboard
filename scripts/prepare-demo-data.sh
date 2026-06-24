@@ -47,6 +47,14 @@ SELECT
 SQL
 }
 
+apply_dashboard_sql_migrations() {
+  local migration
+  while IFS= read -r migration; do
+    printf '    applying %s\n' "${migration#"$ROOT_DIR"/}"
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration"
+  done < <(find "$ROOT_DIR/prisma/migrations" -maxdepth 2 -name migration.sql -print | sort)
+}
+
 "$ROOT_DIR/scripts/bootstrap-deps.sh" psql
 
 DATABASE_URL="$("$ROOT_DIR/scripts/database-url.sh")"
@@ -57,7 +65,7 @@ npx prisma db push
 step_done
 
 step "2/5 Applying dashboard SQL migrations and indexes." "1-10 min, depending on table size"
-npx prisma migrate deploy
+apply_dashboard_sql_migrations
 step_done
 
 step "3/5 Checking demo order volume." "< 10 sec"
