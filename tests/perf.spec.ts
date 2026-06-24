@@ -18,6 +18,33 @@ test.describe("performance @ 4M rows", () => {
     expect(ms, `search took ${ms}ms (budget ${BUDGET_MS}ms)`).toBeLessThan(BUDGET_MS);
   });
 
+  test("dense keyword search paginates under budget", async ({ request }) => {
+    const first = await request.get("/api/orders?q=frank&page=1&pageSize=20", {
+      timeout: BUDGET_MS + 5_000,
+    });
+    expect(first.ok(), `frank page 1 returned HTTP ${first.status()}`).toBeTruthy();
+    const firstBody = await first.json();
+    const firstId = firstBody.data?.[0]?.id;
+    expect(firstId, "frank page 1 returned no first row").toBeTruthy();
+
+    const t0 = Date.now();
+    const second = await request.get("/api/orders?q=frank&page=2&pageSize=20", {
+      timeout: BUDGET_MS + 5_000,
+    });
+    expect(second.ok(), `frank page 2 returned HTTP ${second.status()}`).toBeTruthy();
+    const ms = Date.now() - t0;
+    expect(
+      ms,
+      `frank page 2 took ${ms}ms (budget ${BUDGET_MS}ms)`,
+    ).toBeLessThan(BUDGET_MS);
+
+    const secondBody = await second.json();
+    expect(
+      secondBody.data?.[0]?.id,
+      "frank page 2 should advance to a different first row",
+    ).not.toBe(firstId);
+  });
+
   test("deep pagination responds under budget (once offset pagination is live)", async ({
     request,
   }) => {

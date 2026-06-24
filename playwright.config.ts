@@ -7,7 +7,7 @@ import { defineConfig, devices } from "@playwright/test";
  * http://localhost:3000). watch.ts re-runs these specs whenever the
  * backend/frontend worktrees change.
  */
-const BASE_URL = process.env.BASE_URL ?? "http://localhost:3000";
+const BASE_URL = process.env.BASE_URL ?? "http://localhost:3003";
 
 export default defineConfig({
   testDir: "./tests",

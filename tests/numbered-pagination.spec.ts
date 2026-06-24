@@ -19,11 +19,42 @@ test.describe("numbered pagination", () => {
     );
 
     const firstPage = (await rows.allInnerTexts()).join("|");
+    await expect(rows.first()).not.toHaveAttribute("data-new", "true", {
+      timeout: 1_000,
+    });
+    const sawPageChangeAnimation = page.evaluate(
+      () =>
+        new Promise<boolean>((resolve) => {
+          const firstRowIsAnimating = () =>
+            document
+              .querySelector("[data-testid='search-result']")
+              ?.getAttribute("data-new") === "true";
+          let sawAnimation = firstRowIsAnimating();
+          const observer = new MutationObserver(() => {
+            if (firstRowIsAnimating()) sawAnimation = true;
+          });
+          observer.observe(document.body, {
+            attributes: true,
+            attributeFilter: ["data-new"],
+            childList: true,
+            subtree: true,
+          });
+          setTimeout(() => {
+            observer.disconnect();
+            resolve(sawAnimation);
+          }, 1_200);
+        }),
+    );
+
     await page2.click();
 
     await expect(page.locator("[data-testid='current-page']")).toHaveText(/2/);
     await expect
       .poll(async () => (await rows.allInnerTexts()).join("|"), { timeout: 10_000 })
       .not.toBe(firstPage);
+    expect(
+      await sawPageChangeAnimation,
+      "Pagination should not mark the first row data-new; that animation is only for quick-add/SSE inserts",
+    ).toBe(false);
   });
 });
