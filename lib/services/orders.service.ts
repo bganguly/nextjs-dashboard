@@ -108,6 +108,12 @@ const textProbeCache = new Map<string, { expiresAt: number; promise: Promise<Tex
 const noteProbeCache = new Map<string, { expiresAt: number; promise: Promise<boolean> }>();
 const tokenProbeCache = new Map<string, { expiresAt: number; promise: Promise<TokenProbe> }>();
 
+function clearTextProbeCaches(): void {
+  textProbeCache.clear();
+  noteProbeCache.clear();
+  tokenProbeCache.clear();
+}
+
 export function getNotesHaveMatches(q: string): Promise<boolean> {
   const text = q.trim();
   const key = text.toLowerCase();
@@ -223,6 +229,20 @@ function parseList(csv: string | null | undefined): string[] {
     .filter((s) => s.length > 0);
 }
 
+export function normalizeStatusList(csv: string | null | undefined): OrderStatus[] {
+  return parseList(csv)
+    .map((s) => s.toUpperCase())
+    .filter((s): s is OrderStatus => (ORDER_STATUSES as readonly string[]).includes(s));
+}
+
+export function todayDateString(): string {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const dd = String(now.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 function parseDateBoundary(value: string | null | undefined, edge: "start" | "end"): Date | null {
   if (value == null || value === "") return null;
   const d = new Date(value);
@@ -247,9 +267,7 @@ function parseNumber(value: number | null | undefined, name: string): number | n
 }
 
 export async function resolveFilters(input: OrderFilterInput): Promise<ResolvedFilters> {
-  const statuses = parseList(input.status).filter((s): s is OrderStatus =>
-    (ORDER_STATUSES as readonly string[]).includes(s),
-  );
+  const statuses = normalizeStatusList(input.status);
 
   const regionCodes = parseList(input.regionCode);
   let regionIds: number[] | null = null;
@@ -262,7 +280,8 @@ export async function resolveFilters(input: OrderFilterInput): Promise<ResolvedF
   }
 
   const from = parseDateBoundary(input.from, "start");
-  const to = parseDateBoundary(input.to, "end");
+  const toInput = input.to || (input.from ? todayDateString() : input.to);
+  const to = parseDateBoundary(toInput, "end");
   const minTotal = parseNumber(input.minTotal, "minTotal");
   const maxTotal = parseNumber(input.maxTotal, "maxTotal");
 
@@ -866,6 +885,9 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
         // non-fatal — SSE event fires without the slug
       }
     }
+    clearTextProbeCaches();
+    await updateOrderCategoryFacts(created.id);
+
     publishOrderEvent({
       id: created.id,
       total: Number(created.total),
@@ -874,7 +896,6 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
       categorySlug,
     }).catch(() => {});
     updateDailySummary(created.id).catch(() => {});
-    updateOrderCategoryFacts(created.id).catch(() => {});
     updateDailyCustomerCategorySummary(created.id).catch(() => {});
     updateDailyFilterCategorySummary(created.id).catch(() => {});
     updateDailyStatusCategorySummary(created.id).catch(() => {});

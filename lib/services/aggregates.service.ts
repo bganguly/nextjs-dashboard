@@ -8,7 +8,9 @@ import {
   getNotesHaveMatches,
   getTextProbe,
   getTokenProbe,
+  normalizeStatusList,
   resolveFilters,
+  todayDateString,
 } from "./orders.service";
 
 const DEFAULT_TOP_CATEGORIES = 5;
@@ -45,25 +47,30 @@ function searchToken(q: string | null | undefined): string | null {
 }
 
 export async function getDailyAggregates(input: AggregateQueryInput): Promise<DailyAggregate[]> {
-  if (!input.from || !input.to) {
+  const query = {
+    ...input,
+    to: input.to || (input.from ? todayDateString() : input.to),
+  };
+
+  if (!query.from || !query.to) {
     throw new AppError("BAD_REQUEST", "from and to dates are required (YYYY-MM-DD)");
   }
 
   const topN =
-    input.topCategories != null && input.topCategories > 0
-      ? Math.trunc(input.topCategories)
+    query.topCategories != null && query.topCategories > 0
+      ? Math.trunc(query.topCategories)
       : DEFAULT_TOP_CATEGORIES;
 
   try {
-    const rows = canUseDailySummary(input)
-      ? await fastPath(input)
-      : (await customerTokenSummaryPath(input)) ??
-        ((await noTextMatches(input)) ? [] : null) ??
-          (await noteOnlySummaryPath(input)) ??
-          (await customerSummaryPath(input)) ??
-          (await filterSummaryPath(input)) ??
-          (await factFilterPath(input)) ??
-          (await slowPath(input));
+    const rows = canUseDailySummary(query)
+      ? await fastPath(query)
+      : (await customerTokenSummaryPath(query)) ??
+        ((await noTextMatches(query)) ? [] : null) ??
+          (await noteOnlySummaryPath(query)) ??
+          (await customerSummaryPath(query)) ??
+          (await filterSummaryPath(query)) ??
+          (await factFilterPath(query)) ??
+          (await slowPath(query));
     return rowsToDailyAggregates(rows, topN);
   } catch (err) {
     mapDbError(err, "getDailyAggregates");
@@ -124,7 +131,7 @@ async function customerTokenSummaryPath(input: AggregateQueryInput): Promise<Agg
   const tokenProbe = await getTokenProbe(token);
   if (!tokenProbe.tokenOrderReady) return null;
 
-  const status = parseCsv(input.status);
+  const status = normalizeStatusList(input.status);
   const regionCodes = parseCsv(input.regionCode);
 
   if (status.length === 0 && regionCodes.length === 0) {
@@ -346,7 +353,7 @@ async function customerTokenRollupPath(
           OR lower(c."lastName") = ${token}
         )
         AND o."placedAt" >= ${input.from}::date
-        AND o."placedAt" <= ${input.to}::date
+        AND o."placedAt" < (${input.to}::date + interval '1 day')
     )
     SELECT
       to_char(f.date, 'YYYY-MM-DD')           AS day,
@@ -378,7 +385,7 @@ async function customerSummaryPath(input: AggregateQueryInput): Promise<AggRow[]
   if (custRows.length === 0 || custRows.length > AGG_TEXT_MATCH_CAP) return null;
 
   const customerIds = custRows.map((r) => r.id);
-  const status = parseCsv(input.status);
+  const status = normalizeStatusList(input.status);
   const regionCodes = parseCsv(input.regionCode);
 
   const conds: Prisma.Sql[] = [
@@ -407,7 +414,7 @@ async function filterSummaryPath(input: AggregateQueryInput): Promise<AggRow[] |
   const noQ = !input.q || input.q.trim() === "";
   if (!noQ || input.minTotal != null || input.maxTotal != null) return null;
 
-  const status = parseCsv(input.status);
+  const status = normalizeStatusList(input.status);
   if (status.length === 0) return null;
 
   const regionCodes = parseCsv(input.regionCode);
@@ -456,7 +463,7 @@ async function factFilterPath(input: AggregateQueryInput): Promise<AggRow[] | nu
   const hasTotalFilter = input.minTotal != null || input.maxTotal != null;
   if (!hasTotalFilter) return null;
 
-  const status = parseCsv(input.status);
+  const status = normalizeStatusList(input.status);
   const regionCodes = parseCsv(input.regionCode);
   const conds: Prisma.Sql[] = [
     Prisma.sql`f.date >= ${input.from}::date`,
@@ -607,12 +614,21 @@ function rowsToDailyAggregates(rows: AggRow[], topN: number): DailyAggregate[] {
     const totalOrders = Number(r.total_orders);
     const totalRevenue = Number(r.total_revenue ?? 0);
     const totalItems = Number(r.total_items);
-    const cat: CategoryAggregate = {
-      totalOrders,
-      totalRevenue,
-      totalItems,
-      avgOrderValue: totalOrders > 0 ? totalRevenue / totalOrders : 0,
-    };
+    const existing = entry.categories[r.category];
+    const cat: CategoryAggregate = existing
+      ? {
+          totalOrders: existing.totalOrders + totalOrders,
+          totalRevenue: existing.totalRevenue + totalRevenue,
+          totalItems: existing.totalItems + totalItems,
+          avgOrderValue: 0,
+        }
+      : {
+          totalOrders,
+          totalRevenue,
+          totalItems,
+          avgOrderValue: 0,
+        };
+    cat.avgOrderValue = cat.totalOrders > 0 ? cat.totalRevenue / cat.totalOrders : 0;
     entry.categories[r.category] = cat;
     entry.totals.totalOrders += totalOrders;
     entry.totals.totalRevenue += totalRevenue;
@@ -623,13 +639,18 @@ function rowsToDailyAggregates(rows: AggRow[], topN: number): DailyAggregate[] {
 }
 
 function capToTopCategories(day: DailyAggregate, topN: number): DailyAggregate {
-  const entries = Object.entries(day.categories).sort(
-    ([, a], [, b]) => b.totalRevenue - a.totalRevenue,
-  );
+  const entries = Object.entries(day.categories);
   if (entries.length <= topN) return day;
 
-  const top = entries.slice(0, topN);
-  const rest = entries.slice(topN);
+  const existingOther = day.categories[OTHER_BUCKET];
+  const realEntries = entries
+    .filter(([category]) => category !== OTHER_BUCKET)
+    .sort(
+    ([, a], [, b]) => b.totalRevenue - a.totalRevenue,
+    );
+
+  const top = realEntries.slice(0, topN);
+  const rest = realEntries.slice(topN);
 
   const other = rest.reduce<CategoryAggregate>(
     (acc, [, c]) => ({
@@ -638,12 +659,14 @@ function capToTopCategories(day: DailyAggregate, topN: number): DailyAggregate {
       totalItems: acc.totalItems + c.totalItems,
       avgOrderValue: 0,
     }),
-    { totalOrders: 0, totalRevenue: 0, totalItems: 0, avgOrderValue: 0 },
+    existingOther ?? { totalOrders: 0, totalRevenue: 0, totalItems: 0, avgOrderValue: 0 },
   );
   other.avgOrderValue = other.totalOrders > 0 ? other.totalRevenue / other.totalOrders : 0;
 
   const categories: Record<string, CategoryAggregate> = Object.fromEntries(top);
-  categories[OTHER_BUCKET] = other;
+  if (other.totalOrders > 0 || existingOther) {
+    categories[OTHER_BUCKET] = other;
+  }
   return { ...day, categories };
 }
 
