@@ -1,125 +1,115 @@
 # Dashboard
 
-This repo is the integrated dashboard app on `main`. The active local development
-workflow also keeps split worktrees available so backend, frontend, and tests can
-move independently and be merged back to `main` when requested.
+Start by bringing the AWS database infra up. The app expects a Postgres
+`DATABASE_URL`, and `infra-up.sh` is the standard way to create, repair, or find
+that database.
 
-## Local Demo
-
-Integrated `main`:
-
-```bash
-npm install
-npm run dev
-```
-
-Open http://localhost:3004.
-
-Split worktree workflow:
-
-```bash
-cd ../wt-backend
-npm install
-npm run dev
-```
-
-```bash
-cd ../wt-frontend
-npm install
-npm run dev
-```
-
-Open http://localhost:3003. The frontend proxies `/api/*` to the backend on
-http://localhost:3004.
-
-Quick Order is a separate repo pushed to `bganguly/nextjs-websocket`:
-
-```bash
-cd ../wt-quickorder
-npm install
-npm run dev
-```
-
-Open http://localhost:3005.
-
-## AWS Infra
-
-The infra scripts manage the AWS RDS Postgres stack with Terraform. They are
-safe to rerun: Terraform recreates missing pieces, updates changed pieces, and
-leaves healthy existing pieces alone.
-
-Create or repair infra:
+## 1. Bring Infra Up
 
 ```bash
 ./scripts/infra-up.sh
 ```
 
-What it does:
+The script is safe to rerun. Terraform creates missing resources, updates changed
+resources, and leaves existing healthy resources alone.
 
-- Checks local dependencies: `terraform` and `aws`
-- Detects your public IP and restricts the DB security group to that CIDR
-- Runs `terraform init`
-- Runs `terraform apply` for the VPC, subnets, route table, security group, and RDS Postgres
-- Writes `.env.rds`
-- Checks whether Quick Order is already active on `3005`
+It prints each step with an ETA:
 
-Expected timing:
+- dependency checks
+- public IP detection for the RDS security group
+- `terraform init`
+- VPC, subnet, route table, security group, and RDS Postgres apply
+- `.env.rds` generation
+- Quick Order `3005` availability check
 
-- Existing healthy infra: usually under 2 minutes
-- New RDS instance: usually 5-10 minutes
-- Destroying RDS: usually 5-10 minutes
+Typical timing:
 
-After `infra-up.sh` completes:
+- Existing healthy infra: under 2 minutes
+- New RDS instance: 5-10 minutes
+- Infra destroy: 5-10 minutes
+
+## 2. Find `DATABASE_URL`
+
+After infra is up, the generated value is stored in `.env.rds`.
+
+Print the active database URL:
+
+```bash
+./scripts/database-url.sh
+```
+
+Load it into your current shell:
 
 ```bash
 source .env.rds
+```
+
+If `.env.rds` is missing, run:
+
+```bash
+./scripts/infra-up.sh
+```
+
+## 3. Prepare The Database
+
+```bash
+npm install
 DATABASE_URL="$DATABASE_URL" npx prisma db push
+```
+
+Seed data when needed:
+
+```bash
+DATABASE_URL="$DATABASE_URL" npx tsx scripts/seed.ts
+```
+
+## 4. Start Dashboard
+
+```bash
 DATABASE_URL="$DATABASE_URL" npm run dev
 ```
 
-If Quick Order is not already running:
+Open http://localhost:3004.
+
+## 5. Start Quick Order
+
+Quick Order is a separate repo pushed to `bganguly/nextjs-websocket`.
 
 ```bash
 cd ../wt-quickorder
 npm install
-npm run dev
+BACKEND_URL=http://localhost:3004 npm run dev
 ```
 
-Destroy infra and stop AWS billing:
+Open http://localhost:3005.
+
+Creating an order in Quick Order should move the new row to the top of the
+dashboard list and refresh the aggregates through SSE.
+
+## Verify
+
+```bash
+npm run lint
+npm run build
+```
+
+Run Playwright after the dashboard is active:
+
+```bash
+BASE_URL=http://localhost:3004 BACKEND_URL=http://localhost:3004 npx playwright test
+```
+
+## Tear Down Infra
+
+Destroy AWS resources and stop RDS billing:
 
 ```bash
 ./scripts/infra-down.sh
 ```
 
-`infra-down.sh` removes the RDS instance and networking resources, then deletes
-`.env.rds`.
-
-## Verify
-
-Integrated:
-
-```bash
-npm run lint
-npx playwright test
-```
-
-Split:
-
-```bash
-cd ../wt-backend && npm run lint
-cd ../wt-frontend && npm run lint
-cd ../wt-testing && npm run lint
-```
-
-```bash
-cd ../wt-testing
-BASE_URL=http://localhost:3003 BACKEND_URL=http://localhost:3004 npx playwright test
-```
+This removes the RDS instance and networking resources, then deletes `.env.rds`.
 
 ## Branches
 
-- `main`: integrated dashboard
-- `feature/service-layer`: backend/API/data worktree
-- `feature/frontend-ui`: dashboard UI worktree
-- `feature/testing-setup`: Playwright, infra scripts, and verification worktree
-- `../wt-quickorder`: separate quickorder repo on `main`
+- `develop`: default integration branch on GitHub
+- `main`: release/stable branch
