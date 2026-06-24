@@ -61,7 +61,7 @@ Open http://localhost:3005.
 Creating an order in Quick Order should move the new row to the top of the
 dashboard list and refresh the aggregates through SSE.
 
-## Verify
+## 5. Verify Automatically With Playwright
 
 ```bash
 npm run lint
@@ -74,15 +74,10 @@ With the dashboard running:
 BASE_URL=http://localhost:3004 BACKEND_URL=http://localhost:3004 npx playwright test
 ```
 
-## Tear Down Infra
+## 6. Important: Tear Down Infra
 
 ```bash
 ./scripts/infra-down.sh
 ```
 
 This destroys the AWS resources and removes `.env.rds`.
-
-## Branches
-
-- `develop`: default integration branch on GitHub
-- `main`: release/stable branch
