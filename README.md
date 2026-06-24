@@ -1,36 +1,47 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Dashboard
 
-## Getting Started
+This repo now contains the merged dashboard stack on `main`: backend API routes,
+the dashboard UI, and the Playwright/perf test setup.
 
-First, run the development server:
+## Run the dashboard
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3004.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+The dashboard serves the UI and API from the same Next app. If you deliberately
+run the API somewhere else, set `BACKEND_URL` and the app will proxy `/api/*` to
+that backend.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Run quick order
 
-## Learn More
+Quick order is a separate repo pushed to `bganguly/nextjs-websocket`.
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+cd ../wt-quickorder
+npm install
+npm run dev
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Open http://localhost:3005.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Verify
 
-## Deploy on Vercel
+```bash
+npm run lint
+npx playwright test
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Playwright uses `BASE_URL=http://localhost:3004` by default.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Merged dashboard branches
+
+- `feature/service-layer`
+- `feature/frontend-ui`
+- `feature/testing-setup`
+
+The old worktree branches are still useful as history, but a developer can demo
+the full dashboard functionality from this repo's `main`.

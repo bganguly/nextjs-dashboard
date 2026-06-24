@@ -1,0 +1,104 @@
+import { test, expect, type Page, type Locator } from "@playwright/test";
+
+/**
+ * Aggregates: dragging the date-range control re-queries the DailySummary
+ * aggregates and the chart updates accordingly.
+ *
+ * Targets a date-range brush/slider with data-testid selectors and falls back
+ * to dragging across the chart area itself (a typical brush interaction).
+ */
+
+async function firstPresent(page: Page, selectors: string[]): Promise<Locator | null> {
+  for (const sel of selectors) {
+    const loc = page.locator(sel).first();
+    if ((await loc.count()) > 0) return loc;
+  }
+  return null;
+}
+
+/**
+ * A stable signature of the chart's current data, so we can detect updates
+ * without knowing the exact charting library. Prefers an explicit data hash
+ * exposed by the app, then falls back to structural/textual signals.
+ */
+async function chartSignature(page: Page): Promise<string> {
+  const chart = page.locator("[data-testid='chart']").first();
+  if ((await chart.count()) > 0) {
+    const dataAttr = await chart.getAttribute("data-signature");
+    if (dataAttr) return `sig:${dataAttr}`;
+
+    const bars = chart.locator("[data-testid='bar'], rect, .bar, path.line");
+    const count = await bars.count();
+    const text = (await chart.innerText().catch(() => "")) ?? "";
+    return `bars:${count}|text:${text.replace(/\s+/g, " ").trim()}`;
+  }
+  // Fall back to a headline aggregate value if there is no chart container yet.
+  const total = page.locator(
+    "[data-testid='total-revenue'], [data-testid='total-orders'], [data-testid='aggregate-total']",
+  );
+  if ((await total.count()) > 0) return `total:${await total.first().innerText()}`;
+  return "none";
+}
+
+async function dragRange(page: Page): Promise<boolean> {
+  // Preferred: an explicit range handle we can move a known distance.
+  const startHandle = await firstPresent(page, [
+    "[data-testid='range-start']",
+    "[data-testid='date-range-start']",
+    "[data-testid='range-handle-left']",
+  ]);
+  if (startHandle) {
+    const box = await startHandle.boundingBox();
+    if (box) {
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width / 2 + 120, box.y + box.height / 2, {
+        steps: 12,
+      });
+      await page.mouse.up();
+      return true;
+    }
+  }
+
+  // Fall back: brush-drag across the chart / date-range container.
+  const surface = await firstPresent(page, [
+    "[data-testid='date-range']",
+    "[data-testid='chart']",
+  ]);
+  if (surface) {
+    const box = await surface.boundingBox();
+    if (box) {
+      const y = box.y + box.height / 2;
+      await page.mouse.move(box.x + box.width * 0.2, y);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width * 0.7, y, { steps: 15 });
+      await page.mouse.up();
+      return true;
+    }
+  }
+  return false;
+}
+
+test.describe("aggregates", () => {
+  test("dragging the date range updates the chart data", async ({ page }) => {
+    await page.goto("/");
+
+    // Ensure the chart is present before measuring.
+    const chart = page.locator("[data-testid='chart'], main svg, main canvas").first();
+    await expect(chart, "chart did not render").toBeVisible({ timeout: 15_000 });
+
+    const before = await chartSignature(page);
+
+    const dragged = await dragRange(page);
+    expect(dragged, "could not find a date-range control or chart to drag").toBeTruthy();
+
+    // The chart re-queries aggregates after the range changes; wait for the
+    // signature to differ from the pre-drag state.
+    await expect
+      .poll(async () => chartSignature(page), {
+        message: "chart data did not change after dragging the date range",
+        timeout: 10_000,
+      })
+      .not.toBe(before);
+  });
+});
