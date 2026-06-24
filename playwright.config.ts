@@ -1,12 +1,12 @@
 import { defineConfig, devices } from "@playwright/test";
 
 /**
- * Playwright config for split dashboard development.
+ * Playwright config for the integrated dashboard app.
  *
- * The frontend under test is expected to run at BASE_URL. In split dev,
- * wt-frontend runs on 3003 and proxies API calls to wt-backend on 3004.
+ * The app under test is expected to run at BASE_URL. The integrated dashboard
+ * defaults to port 3004 to match npm run dev.
  */
-const BASE_URL = process.env.BASE_URL ?? "http://localhost:3003";
+const BASE_URL = process.env.BASE_URL ?? "http://localhost:3004";
 
 export default defineConfig({
   testDir: "./tests",
