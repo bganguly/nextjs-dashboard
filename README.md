@@ -1,7 +1,7 @@
 # Dashboard
 
-Bring infra up first, then start the dashboard. The scripts handle the database
-URL discovery so you do not have to copy/paste `DATABASE_URL`.
+Bring infra up first, prepare the demo data, then start the dashboard. The
+scripts handle the database connection details.
 
 ## 1. Bring Infra Up
 
@@ -16,7 +16,6 @@ Expected infra timing:
 
 - Existing healthy infra: usually under 2 minutes
 - New RDS instance: usually 5-10 minutes
-- Destroying RDS: usually 5-10 minutes
 
 ## 2. Prepare Demo Data
 
@@ -27,10 +26,10 @@ npm install
 
 `prepare-demo-data.sh`:
 
-- Finds the database URL using `scripts/database-url.sh`
 - Applies the Prisma schema and dashboard SQL migrations
 - Seeds the full demo data when the orders table is empty
 - Rebuilds the dashboard read models for fast list and chart results
+- Prints an ETA, elapsed time, and table-count summary for each major step
 
 ## 3. Start Dashboard On 3004
 
@@ -41,16 +40,10 @@ npm run dev
 `npm run dev` starts the combined dashboard backend and UI at
 http://localhost:3004.
 
-This equivalent helper also resolves `DATABASE_URL` first:
+This equivalent helper also loads the connection details first:
 
 ```bash
 ./scripts/start-dashboard.sh
-```
-
-If you only want to print the database URL:
-
-```bash
-./scripts/database-url.sh
 ```
 
 ## 4. Start Quick Order On 3005
