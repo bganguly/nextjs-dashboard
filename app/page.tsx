@@ -55,6 +55,14 @@ export default function Dashboard() {
   const [regionOptions, setRegionOptions] = useState<RegionOption[]>([]);
   // Active search query, lifted from SearchTable so the chart can match it.
   const [searchQuery, setSearchQuery] = useState("");
+  // Category whose aggregate tile should briefly pulse after an SSE order.
+  const [updatingSlug, setUpdatingSlug] = useState<string | null>(null);
+  // Last SSE order, used to patch the chart's bars IN PLACE (Task 16) instead of
+  // refetching — refetching cleared the bars and caused the FOUC / layout bounce.
+  const [lastSseOrder, setLastSseOrder] = useState<{
+    categorySlug: string;
+    placedAt: string;
+  } | null>(null);
   // Most recent order event, used to target the row + chart-bucket animations.
   const [lastOrder, setLastOrder] = useState<{
     id?: string | number;
@@ -72,6 +80,28 @@ export default function Dashboard() {
       setLastOrder({ id, date, seq: n + 1 });
       return n + 1;
     });
+    // Pulse only the affected category's aggregate tile (Task 14). Depends on
+    // wt1 including `categorySlug` on the SSE order payload; absent it, no tile
+    // pulses (the rest of the refresh still runs).
+    const slug =
+      typeof event.categorySlug === "string" ? event.categorySlug : null;
+    if (slug) {
+      setUpdatingSlug(slug);
+      setTimeout(() => setUpdatingSlug(null), 500);
+      // Hand the chart an in-place patch instead of a refetch (Task 16). Pass
+      // the SAME normalized local day used for the bucket pulse so the patch and
+      // pulse target the same bar (Chart slices placedAt to 10 chars). Fall back
+      // to the raw timestamp only when the day couldn't be derived. A fresh
+      // object every time so the patch effect fires for repeat categories too.
+      const placedAt =
+        date ??
+        (typeof event.placedAt === "string"
+          ? event.placedAt
+          : typeof event.timestamp === "string"
+            ? event.timestamp
+            : "");
+      setLastSseOrder({ categorySlug: slug, placedAt });
+    }
   }, []);
 
   // Prefer the full region list (with display names) from /api/regions. If that
@@ -135,6 +165,8 @@ export default function Dashboard() {
                   searchQuery={searchQuery}
                   highlightDate={lastOrder?.date}
                   highlightKey={lastOrder?.seq}
+                  updatingSlug={updatingSlug}
+                  lastSseOrder={lastSseOrder}
                 />
                 <SearchTable
                   refreshSignal={refreshSignal}

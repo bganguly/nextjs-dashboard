@@ -11,13 +11,21 @@ export type SearchRow = Record<string, unknown>;
 
 type SortDir = "asc" | "desc";
 
-interface SearchResponse {
+export interface SearchResponse {
   data: SearchRow[];
   page: number;
   totalPages: number;
   total: number;
   /** True when `total` is a capped estimate (broad result set). */
   approximate?: boolean;
+}
+
+export interface TableRequestState {
+  q: string;
+  page: number;
+  pageSize: number;
+  sort: string;
+  dir: SortDir;
 }
 
 interface SearchTableProps {
@@ -35,9 +43,12 @@ interface SearchTableProps {
   highlightKey?: number;
   /** Notified with the debounced query so the chart can narrow to the same set. */
   onQueryChange?: (q: string) => void;
+  /** Controlled data path used when the dashboard fetches rows + aggregates together. */
+  controlledResponse?: SearchResponse | null;
+  controlledLoading?: boolean;
+  controlledError?: string | null;
+  onRequestStateChange?: (state: TableRequestState) => void;
 }
-
-const SEARCH_DEBOUNCE_MS = 300;
 
 function cn(...classes: (string | false | undefined)[]): string {
   return classes.filter(Boolean).join(" ");
@@ -129,6 +140,10 @@ export default function SearchTable({
   highlightId,
   highlightKey,
   onQueryChange,
+  controlledResponse,
+  controlledLoading = false,
+  controlledError = null,
+  onRequestStateChange,
 }: SearchTableProps) {
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -140,11 +155,15 @@ export default function SearchTable({
   const [sort, setSort] = useState<string>("");
   const [dir, setDir] = useState<SortDir>("asc");
   const [loading, setLoading] = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Row currently playing the new-order flash (cleared after the animation).
   const [flashId, setFlashId] = useState<string | number | null>(null);
+  // First-row id that just changed (drives the `data-new` entry animation).
+  const [newFirstId, setNewFirstId] = useState<string | number | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
+  const isControlled = onRequestStateChange != null;
 
   // Latest onRows without making it a fetch dependency.
   const onRowsRef = useRef(onRows);
@@ -159,12 +178,14 @@ export default function SearchTable({
       sortCol: string,
       sortDir: SortDir,
       f: OrderFilters | undefined,
+      showSearchIndicator: boolean,
     ) => {
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
 
       setLoading(true);
+      setSearchLoading(showSearchIndicator);
       setError(null);
       try {
         const params = new URLSearchParams({
@@ -196,32 +217,60 @@ export default function SearchTable({
         setTotal(0);
         setApproximate(false);
       } finally {
-        setLoading(false);
+        if (abortRef.current === controller) {
+          setLoading(false);
+          setSearchLoading(false);
+        }
       }
     },
     [endpoint, pageSize],
   );
 
-  // Debounce the search box; any query change snaps back to page 1.
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedQuery(query);
-      setPage(1);
-    }, SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
-  }, [query]);
+  // Search commits on Enter only (Task 19) — typing updates the input value but
+  // does NOT fetch. The Enter handler (and clear+Enter) is the sole path that
+  // sets `debouncedQuery`, which drives both the list fetch below and the
+  // parent's chart aggregates via onQueryChange. No as-you-type timer.
 
-  // Notify the parent of the active (debounced) query so the chart can narrow
+  // Notify the parent of the active (committed) query so the chart can narrow
   // its aggregates to the same matching set.
   useEffect(() => {
     onQueryChange?.(debouncedQuery);
   }, [debouncedQuery, onQueryChange]);
+
+  useEffect(() => {
+    if (!isControlled) return;
+    if (!controlledResponse) return;
+    const data = Array.isArray(controlledResponse.data)
+      ? controlledResponse.data
+      : [];
+    // Controlled data is supplied by the parent after one combined dashboard fetch.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setRows(data);
+    setTotalPages(Math.max(1, controlledResponse.totalPages ?? 1));
+    setTotal(controlledResponse.total ?? 0);
+    setApproximate(Boolean(controlledResponse.approximate));
+    setError(null);
+    onRowsRef.current?.(data);
+  }, [controlledResponse, isControlled]);
+
+  useEffect(() => {
+    if (!isControlled) return;
+    // Controlled errors mirror the parent combined request state.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setError(controlledError);
+    if (!controlledError) return;
+    setRows([]);
+    setTotalPages(1);
+    setTotal(0);
+    setApproximate(false);
+  }, [controlledError, isControlled]);
 
   // Single source of truth for fetching: reacts to query, page, sort, filters,
   // and the SSE refresh signal. Sorting/paging/filtering are all server-side.
   // When filters change we snap back to page 1 first (skipping a redundant
   // fetch at the old page).
   const lastFiltersKey = useRef<string>(JSON.stringify(filters ?? {}));
+  const lastFetchedQuery = useRef(debouncedQuery);
   useEffect(() => {
     const key = JSON.stringify(filters ?? {});
     if (key !== lastFiltersKey.current) {
@@ -232,9 +281,32 @@ export default function SearchTable({
         return; // re-runs with page 1
       }
     }
+    const queryChanged = debouncedQuery !== lastFetchedQuery.current;
+    lastFetchedQuery.current = debouncedQuery;
+    if (isControlled) {
+      onRequestStateChange?.({
+        q: debouncedQuery,
+        page,
+        pageSize,
+        sort,
+        dir,
+      });
+      return;
+    }
     // Kicks off an async fetch (which toggles loading state); intentional.
-    fetchPage(debouncedQuery, page, sort, dir, filters);
-  }, [debouncedQuery, page, sort, dir, filters, refreshSignal, fetchPage]);
+    fetchPage(debouncedQuery, page, sort, dir, filters, queryChanged);
+  }, [
+    debouncedQuery,
+    page,
+    pageSize,
+    sort,
+    dir,
+    filters,
+    refreshSignal,
+    fetchPage,
+    isControlled,
+    onRequestStateChange,
+  ]);
 
   useEffect(() => {
     return () => abortRef.current?.abort();
@@ -253,6 +325,23 @@ export default function SearchTable({
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setFlashId(highlightId);
     const t = setTimeout(() => setFlashId(null), 1600);
+    return () => clearTimeout(t);
+  }, [rows, highlightKey, highlightId]);
+
+  // Mark the first row as "new" only for an explicit new-order event. Pagination
+  // also changes the first row id, so the SSE/quick-add highlight key is the
+  // guard that keeps normal page changes from replaying the entry animation.
+  const lastNewFirstKey = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (highlightKey == null || highlightId == null) return;
+    if (highlightKey === lastNewFirstKey.current) return;
+    const firstId = rows[0]?.id as string | number | undefined;
+    if (firstId == null) return;
+    if (String(firstId) !== String(highlightId)) return;
+    lastNewFirstKey.current = highlightKey;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setNewFirstId(firstId);
+    const t = setTimeout(() => setNewFirstId(null), 600);
     return () => clearTimeout(t);
   }, [rows, highlightKey, highlightId]);
 
@@ -286,7 +375,7 @@ export default function SearchTable({
     <section className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
       <header className="mb-3 flex items-center justify-between gap-3">
         <h2 className="text-base font-semibold">Search</h2>
-        {loading && (
+        {(isControlled ? controlledLoading : searchLoading) && (
           <span className="text-xs text-indigo-500" aria-live="polite">
             searching…
           </span>
@@ -300,7 +389,8 @@ export default function SearchTable({
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
-            // Bypass the 300ms debounce — search immediately on Enter.
+            // Commit the search: list + aggregates repaint. Also the clear+Enter
+            // path — an emptied input commits "" and restores the full list.
             setDebouncedQuery(query);
             setPage(1);
           }
@@ -320,13 +410,17 @@ export default function SearchTable({
             className="flex flex-col items-center justify-center gap-2 py-12 text-sm text-gray-400"
             aria-live="polite"
           >
-            {loading ? (
+            {(isControlled ? controlledLoading : loading) ? (
               <>
                 <span
                   aria-hidden
                   className="h-6 w-6 animate-spin rounded-full border-2 border-gray-300 border-t-indigo-500 dark:border-gray-700 dark:border-t-indigo-400"
                 />
-                <span className="animate-pulse">Searching…</span>
+                <span className={searchLoading ? "animate-pulse" : undefined}>
+                  {(isControlled ? controlledLoading : searchLoading)
+                    ? "Searching…"
+                    : "Loading…"}
+                </span>
               </>
             ) : (
               "No results."
@@ -389,6 +483,14 @@ export default function SearchTable({
                   key={(row.id as string | number | undefined) ?? i}
                   data-testid="search-result"
                   data-id={row.id as string | number | undefined}
+                  data-order-id={row.id as string | number | undefined}
+                  data-new={
+                    i === 0 &&
+                    newFirstId != null &&
+                    String(row.id) === String(newFirstId)
+                      ? "true"
+                      : undefined
+                  }
                   className={cn(
                     "border-b border-gray-100 hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-800/50",
                     flashId != null &&
@@ -431,7 +533,7 @@ export default function SearchTable({
                   type="button"
                   data-testid="prev-page"
                   onClick={() => goToPage(page - 1)}
-                  disabled={page <= 1 || loading}
+                  disabled={page <= 1 || (isControlled ? controlledLoading : loading)}
                   className="flex h-9 items-center rounded-md border border-gray-300 px-3 text-sm hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-gray-700 dark:hover:bg-gray-800"
                 >
                   Prev
@@ -476,7 +578,7 @@ export default function SearchTable({
                   type="button"
                   data-testid="next-page"
                   onClick={() => goToPage(page + 1)}
-                  disabled={page >= totalPages || loading}
+                  disabled={page >= totalPages || (isControlled ? controlledLoading : loading)}
                   className="flex h-9 items-center rounded-md border border-gray-300 px-3 text-sm hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-gray-700 dark:hover:bg-gray-800"
                 >
                   Next

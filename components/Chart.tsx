@@ -7,6 +7,7 @@ import {
   Brush,
   CartesianGrid,
   Legend,
+  Rectangle,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -34,7 +35,7 @@ interface RawCategory {
  * Raw backend row: a date plus its per-category breakdown, keyed by category
  * name (an object, not an array): `{ "Category 1": { totalRevenue, ... } }`.
  */
-interface RawAggregate {
+export interface RawAggregate {
   date: string;
   categories: Record<string, RawCategory>;
 }
@@ -113,8 +114,15 @@ const compactNumber = (n: number): string => {
 };
 
 interface ChartProps {
-  /** Bumped by the SSE LiveFeed to force a refetch of the current range. */
+  /** Retained for API compatibility. The chart no longer refetches on SSE — see
+   *  `lastSseOrder` for in-place patching (Task 16). Only user-driven changes
+   *  (filters / search / brush) trigger a fetch. */
   refreshSignal?: number;
+  /** Last SSE order, applied as an in-place increment to the matching day's
+   *  category bucket instead of triggering a full refetch (Task 16). This avoids
+   *  the bars clearing + layout bounce on every order. Keyed by category NAME,
+   *  same as `categories`. */
+  lastSseOrder?: { categorySlug: string; placedAt: string } | null;
   /** Endpoint that returns stacked aggregates for a date range. */
   endpoint?: string;
   /** How many categories to stack individually; the rest roll into "Others". */
@@ -128,6 +136,14 @@ interface ChartProps {
   highlightKey?: number;
   /** Active search query; narrows aggregates to the same matching orders. */
   searchQuery?: string;
+  /** Category whose tile should briefly pulse after an SSE order (Task 14).
+   *  Matched against each tile's category; null clears the pulse. */
+  updatingSlug?: string | null;
+  /** Controlled data path used when the dashboard fetches rows + aggregates together. */
+  controlledData?: RawAggregate[] | null;
+  controlledLoading?: boolean;
+  controlledError?: string | null;
+  onRangeChange?: (range: { from: string; to: string }) => void;
 }
 
 // Stable palette for stacked series. Cycled if there are more series than colors.
@@ -156,13 +172,18 @@ function defaultRange(): { from: string; to: string } {
 }
 
 export default function Chart({
-  refreshSignal = 0,
   endpoint = "/api/aggregates",
   topN = DEFAULT_TOP_N,
   filters,
   highlightDate,
   highlightKey,
   searchQuery,
+  updatingSlug,
+  lastSseOrder,
+  controlledData,
+  controlledLoading = false,
+  controlledError = null,
+  onRangeChange,
 }: ChartProps) {
   const [rawData, setRawData] = useState<RawAggregate[]>([]);
   const [range, setRange] = useState(defaultRange);
@@ -170,10 +191,14 @@ export default function Chart({
   const [error, setError] = useState<string | null>(null);
   // Date whose bar is currently pulsing after a new order (transient).
   const [pulseDate, setPulseDate] = useState<string | null>(null);
+  // Category whose chart bar should briefly flash (brightness pop) after an SSE
+  // order lands (Task 17) — the visible companion to the in-place patch above.
+  const [flashSlug, setFlashSlug] = useState<string | null>(null);
 
   // Abort in-flight requests so rapid drags don't race each other.
   const abortRef = useRef<AbortController | null>(null);
   const dragTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isControlled = controlledData !== undefined || onRangeChange != null;
 
   const fetchAggregates = useCallback(
     async (from: string, to: string) => {
@@ -183,8 +208,10 @@ export default function Chart({
 
       setLoading(true);
       setError(null);
-      setRawData([]); // clear stale bars immediately so the chart reacts in
-      // lockstep with the orders list instead of showing ghost data
+      // NOTE: do NOT clear rawData here. Clearing on every load caused the chart
+      // to flash empty (FOUC) on SSE-driven refreshes. SSE no longer refetches
+      // (see the lastSseOrder patch effect); user-driven fetches replace the
+      // bars atomically when the response lands.
       try {
         // A date filter, if set, overrides the brush/default range; the other
         // filters (status, region, total) narrow the same set as the table.
@@ -213,14 +240,33 @@ export default function Chart({
     [endpoint, topN, filters, searchQuery],
   );
 
-  // Initial load + refetch whenever the SSE refresh signal changes.
+  // Initial load + refetch on user-driven changes only (filters / search via
+  // fetchAggregates' identity). SSE orders are patched in place below, NOT
+  // refetched — that full refetch was the cause of the chart FOUC (Task 16).
   useEffect(() => {
+    if (isControlled) return;
     // Kicks off an async fetch (which toggles loading state); intentional.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchAggregates(range.from, range.to);
     // range.from/range.to intentionally omitted: drag handles its own fetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchAggregates, refreshSignal]);
+  }, [fetchAggregates, isControlled]);
+
+  useEffect(() => {
+    if (!isControlled) return;
+    if (!controlledData) return;
+    // Controlled data is supplied by the parent after one combined dashboard fetch.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setRawData(Array.isArray(controlledData) ? controlledData : []);
+    setError(null);
+  }, [controlledData, isControlled]);
+
+  useEffect(() => {
+    if (!isControlled) return;
+    // Controlled errors mirror the parent combined request state.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setError(controlledError);
+  }, [controlledError, isControlled]);
 
   useEffect(() => {
     return () => {
@@ -228,6 +274,49 @@ export default function Chart({
       if (dragTimer.current) clearTimeout(dragTimer.current);
     };
   }, []);
+
+  // Incremental patch for SSE orders (Task 16): bump the matching day's category
+  // count in place instead of refetching. Keeps every bar mounted (no FOUC) and
+  // leaves the chart layout stable. If the order's day isn't in the loaded
+  // window, leave the data untouched — a refetch would clear the bars, which is
+  // exactly what we're avoiding.
+  const lastPatched = useRef<{ categorySlug: string; placedAt: string } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!lastSseOrder) return;
+    if (lastSseOrder === lastPatched.current) return;
+    lastPatched.current = lastSseOrder;
+    const { categorySlug, placedAt } = lastSseOrder;
+    if (!categorySlug || !placedAt) return;
+    const day = placedAt.slice(0, 10);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setRawData((prev) => {
+      const idx = prev.findIndex((entry) => entry.date === day);
+      if (idx === -1) return prev; // day not in window — don't disturb the bars
+      const entry = prev[idx];
+      const cat = entry.categories?.[categorySlug];
+      const nextCat: RawCategory = cat
+        ? { ...cat, totalOrders: (cat.totalOrders ?? 0) + 1 }
+        : { totalOrders: 1, totalRevenue: 0 };
+      const next = prev.slice();
+      next[idx] = {
+        ...entry,
+        categories: { ...entry.categories, [categorySlug]: nextCat },
+      };
+      return next;
+    });
+  }, [lastSseOrder]);
+
+  // Bar flash (Task 17): when an SSE order lands, brighten the affected
+  // category's bar for ~600ms so the in-place patch is unmistakable.
+  useEffect(() => {
+    if (!lastSseOrder) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setFlashSlug(lastSseOrder.categorySlug);
+    const t = setTimeout(() => setFlashSlug(null), 600);
+    return () => clearTimeout(t);
+  }, [lastSseOrder]);
 
   const isDark = useIsDark();
   // recharts renders raw SVG and can't use Tailwind `dark:` utilities, so pick
@@ -372,16 +461,32 @@ export default function Chart({
       setRange({ from, to });
       if (dragTimer.current) clearTimeout(dragTimer.current);
       dragTimer.current = setTimeout(() => {
+        if (isControlled) {
+          onRangeChange?.({ from, to });
+          return;
+        }
         fetchAggregates(from, to);
       }, DRAG_DEBOUNCE_MS);
     },
-    [buckets, range.from, range.to, fetchAggregates],
+    [
+      buckets,
+      range.from,
+      range.to,
+      fetchAggregates,
+      isControlled,
+      onRangeChange,
+    ],
   );
 
   return (
     <section
       data-testid="chart"
-      className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900"
+      // `data-loading` mirrors the internal fetch state so wt3 can assert the
+      // refetch window; `relative overflow-hidden` clips the ::before sweep bar.
+      data-loading={
+        (isControlled ? controlledLoading : loading) ? "true" : undefined
+      }
+      className="relative overflow-hidden rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900"
     >
       <header className="mb-3 flex items-center justify-between">
         <div>
@@ -396,7 +501,7 @@ export default function Chart({
             </p>
           )}
         </div>
-        {loading && (
+        {(isControlled ? controlledLoading : loading) && (
           <span className="text-xs text-indigo-500" aria-live="polite">
             updating…
           </span>
@@ -409,7 +514,9 @@ export default function Chart({
         </div>
       ) : buckets.length === 0 ? (
         <div className="flex h-72 items-center justify-center text-sm text-gray-400">
-          {loading ? "Loading…" : "No data for this range."}
+          {(isControlled ? controlledLoading : loading)
+            ? "Loading…"
+            : "No data for this range."}
         </div>
       ) : (
         <>
@@ -488,6 +595,18 @@ export default function Chart({
                 radius={
                   i === seriesKeys.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]
                 }
+                // recharts doesn't pass plain data-* through <Bar> to the rect,
+                // so render each rect inside a <g> that carries the test hooks
+                // and the data-flash brightness pop (Task 17).
+                shape={(props: object) => (
+                  <g
+                    data-testid="chart-bar"
+                    data-category={key}
+                    data-flash={flashSlug === key ? "true" : undefined}
+                  >
+                    <Rectangle {...props} />
+                  </g>
+                )}
               />
             ))}
             <Brush
@@ -514,6 +633,15 @@ export default function Chart({
             {displayTotals.map((ct) => (
               <span
                 key={ct.category}
+                data-testid="aggregate-tile"
+                // The tile's category is its identity; wt1's SSE `categorySlug`
+                // must carry this same value for the right tile to pulse.
+                data-category={ct.category}
+                data-updating={
+                  updatingSlug != null && updatingSlug === ct.category
+                    ? "true"
+                    : undefined
+                }
                 className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs"
                 title={ct.orders.toLocaleString()}
               >
