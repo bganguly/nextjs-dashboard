@@ -1,15 +1,7 @@
 # Dashboard
 
-Start by bringing the AWS database infra up. The app expects a Postgres
-`DATABASE_URL`, and `infra-up.sh` is the standard way to create, repair, or find
-that database.
-
-Important: `infra-up.sh` only creates or reconnects the AWS infrastructure. It
-does not populate millions of orders or rebuild the token/read-model tables. For
-the full demo experience, use an already-populated database. If the existing RDS
-database is intact, bringing infra up and starting `3004` should make the
-dashboard work immediately. Quick Order on `3005` is the only separate app that
-may still need to be started.
+Bring infra up first, then start the dashboard. The scripts handle the database
+URL discovery so you do not have to copy/paste `DATABASE_URL`.
 
 ## 1. Bring Infra Up
 
@@ -17,90 +9,41 @@ may still need to be started.
 ./scripts/infra-up.sh
 ```
 
-The script is safe to rerun. Terraform creates missing resources, updates changed
-resources, and leaves existing healthy resources alone.
+This creates or repairs the AWS pieces: VPC, subnets, route table, security
+group, and RDS Postgres. It is safe to rerun. It prints each step and an ETA.
 
-It prints each step with an ETA:
+Expected infra timing:
 
-- dependency checks
-- public IP detection for the RDS security group
-- `terraform init`
-- VPC, subnet, route table, security group, and RDS Postgres apply
-- `.env.rds` generation
-- Quick Order `3005` availability check
+- Existing healthy infra: usually under 2 minutes
+- New RDS instance: usually 5-10 minutes
+- Destroying RDS: usually 5-10 minutes
 
-Typical timing:
+The full demo data and read models are expected to already exist in the RDS
+database. Rebuilding millions of orders, token summaries, category facts, and
+aggregate read models is a separate long-running data job, not part of normal
+infra startup.
 
-- Existing healthy infra: under 2 minutes
-- New RDS instance: 5-10 minutes
-- Infra destroy: 5-10 minutes
+## 2. Start Dashboard On 3004
 
-Data timing:
+```bash
+npm install
+./scripts/start-dashboard.sh
+```
 
-- Existing populated RDS database: no backfill should be needed
-- Fresh empty RDS database: schema creation is quick, but large seed/read-model
-  population can take hours
-- Token summaries, category facts, and aggregate read models are required for
-  the sub-second search/chart behavior demonstrated here
+`start-dashboard.sh`:
 
-## 2. Find `DATABASE_URL`
+- Finds the database URL using `scripts/database-url.sh`
+- Exports it for the process
+- Applies the Prisma schema
+- Starts the dashboard at http://localhost:3004
 
-After infra is up, the generated value is stored in `.env.rds`.
-
-Print the active database URL:
+If you only want to print the database URL:
 
 ```bash
 ./scripts/database-url.sh
 ```
 
-Load it into your current shell:
-
-```bash
-source .env.rds
-```
-
-If `.env.rds` is missing, run:
-
-```bash
-./scripts/infra-up.sh
-```
-
-## 3. Prepare Or Reuse The Database
-
-```bash
-npm install
-DATABASE_URL="$DATABASE_URL" npx prisma db push
-```
-
-For an already-populated RDS database, stop here and start the dashboard.
-
-Only seed a new empty database when you intentionally want to rebuild the demo
-data from scratch. This is not a quick infra step; large data and read-model
-population can take hours.
-
-```bash
-DATABASE_URL="$DATABASE_URL" npx tsx scripts/seed.ts
-```
-
-For very large local/RDS data sets, the repo also contains lower-level SQL and
-backfill helpers such as:
-
-```bash
-psql "$DATABASE_URL" -v orders=4000000 -f scripts/seed-large.sql
-DATABASE_URL="$DATABASE_URL" npx tsx scripts/backfill-visible-token-category-summary.ts
-```
-
-Use those only when rebuilding the large benchmark dataset deliberately.
-
-## 4. Start Dashboard
-
-```bash
-DATABASE_URL="$DATABASE_URL" npm run dev
-```
-
-Open http://localhost:3004.
-
-## 5. Start Quick Order
+## 3. Start Quick Order On 3005
 
 Quick Order is a separate repo pushed to `bganguly/nextjs-websocket`.
 
@@ -122,7 +65,7 @@ npm run lint
 npm run build
 ```
 
-Run Playwright after the dashboard is active:
+With the dashboard running:
 
 ```bash
 BASE_URL=http://localhost:3004 BACKEND_URL=http://localhost:3004 npx playwright test
@@ -130,13 +73,11 @@ BASE_URL=http://localhost:3004 BACKEND_URL=http://localhost:3004 npx playwright 
 
 ## Tear Down Infra
 
-Destroy AWS resources and stop RDS billing:
-
 ```bash
 ./scripts/infra-down.sh
 ```
 
-This removes the RDS instance and networking resources, then deletes `.env.rds`.
+This destroys the AWS resources and removes `.env.rds`.
 
 ## Branches
 

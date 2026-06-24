@@ -70,7 +70,7 @@ Quick Order is not responding on :3005.
 Start it in a separate terminal:
   cd ../wt-quickorder
   npm install
-  npm run dev
+  BACKEND_URL=http://localhost:3004 npm run dev
 
 Then open http://localhost:3005.
 QUICKORDER
@@ -79,9 +79,8 @@ fi
 cat <<'NEXT'
 
 Next steps:
-  source .env.rds
-  DATABASE_URL="$DATABASE_URL" npx prisma db push
-  DATABASE_URL="$DATABASE_URL" npm run dev
+  npm install
+  ./scripts/start-dashboard.sh
 
 Tear down (stops billing):  ./scripts/infra-down.sh
 NEXT
