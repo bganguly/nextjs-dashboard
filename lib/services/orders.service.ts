@@ -108,6 +108,12 @@ const textProbeCache = new Map<string, { expiresAt: number; promise: Promise<Tex
 const noteProbeCache = new Map<string, { expiresAt: number; promise: Promise<boolean> }>();
 const tokenProbeCache = new Map<string, { expiresAt: number; promise: Promise<TokenProbe> }>();
 
+function clearTextProbeCaches(): void {
+  textProbeCache.clear();
+  noteProbeCache.clear();
+  tokenProbeCache.clear();
+}
+
 export function getNotesHaveMatches(q: string): Promise<boolean> {
   const text = q.trim();
   const key = text.toLowerCase();
@@ -879,6 +885,9 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
         // non-fatal — SSE event fires without the slug
       }
     }
+    clearTextProbeCaches();
+    await updateOrderCategoryFacts(created.id);
+
     publishOrderEvent({
       id: created.id,
       total: Number(created.total),
@@ -887,7 +896,6 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
       categorySlug,
     }).catch(() => {});
     updateDailySummary(created.id).catch(() => {});
-    updateOrderCategoryFacts(created.id).catch(() => {});
     updateDailyCustomerCategorySummary(created.id).catch(() => {});
     updateDailyFilterCategorySummary(created.id).catch(() => {});
     updateDailyStatusCategorySummary(created.id).catch(() => {});

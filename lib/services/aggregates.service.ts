@@ -353,7 +353,7 @@ async function customerTokenRollupPath(
           OR lower(c."lastName") = ${token}
         )
         AND o."placedAt" >= ${input.from}::date
-        AND o."placedAt" <= ${input.to}::date
+        AND o."placedAt" < (${input.to}::date + interval '1 day')
     )
     SELECT
       to_char(f.date, 'YYYY-MM-DD')           AS day,
