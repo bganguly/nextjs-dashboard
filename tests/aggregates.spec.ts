@@ -140,12 +140,20 @@ test.describe("aggregates", () => {
     await page.getByTestId("search-input").press("Enter");
     await page.locator("input[type='date']").first().fill("2026-06-22");
 
+    const othersBars = page.locator("[data-testid='chart-bar'][data-category='Others']");
+    const showOthers = page.getByTestId("chart-show-others");
+
+    await expect(showOthers).toBeVisible();
+    await expect(showOthers).not.toBeChecked();
+    await expect(othersBars).toHaveCount(0);
+
+    await showOthers.check();
+
     await expect
       .poll(
-        async () =>
-          page.locator("[data-testid='chart-bar'][data-category='Others']").count(),
+        async () => othersBars.count(),
         {
-          message: "rolled-up Others buckets did not render in the chart",
+          message: "rolled-up Others buckets did not render after enabling them",
           timeout: 10_000,
         },
       )
