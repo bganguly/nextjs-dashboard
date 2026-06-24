@@ -18,11 +18,6 @@ Expected infra timing:
 - New RDS instance: usually 5-10 minutes
 - Destroying RDS: usually 5-10 minutes
 
-The full demo data and read models are expected to already exist in the RDS
-database. Rebuilding millions of orders, token summaries, category facts, and
-aggregate read models is a separate long-running data job, not part of normal
-infra startup.
-
 ## 2. Start Dashboard On 3004
 
 ```bash
@@ -33,8 +28,9 @@ npm install
 `start-dashboard.sh`:
 
 - Finds the database URL using `scripts/database-url.sh`
-- Exports it for the process
-- Applies the Prisma schema
+- Applies the Prisma schema and dashboard SQL migrations
+- Seeds the full demo data when the orders table is empty
+- Rebuilds the dashboard read models for fast list and chart results
 - Starts the dashboard at http://localhost:3004
 
 If you only want to print the database URL:

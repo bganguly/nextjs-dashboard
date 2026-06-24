@@ -3,7 +3,7 @@ set -euo pipefail
 
 if [[ "$#" -eq 0 ]]; then
   echo "Usage: $0 <tool> [tool ...]"
-  echo "Supported tools: terraform aws python3"
+  echo "Supported tools: terraform aws python3 psql"
   exit 1
 fi
 
@@ -22,6 +22,7 @@ install_tool_if_missing() {
     terraform) binary="terraform"; formula="hashicorp/tap/terraform" ;;
     aws)       binary="aws";       formula="awscli" ;;
     python3)   binary="python3";   formula="python" ;;
+    psql)      binary="psql";      formula="libpq" ;;
     *) echo "Error: unsupported tool '$tool'." >&2; exit 1 ;;
   esac
 
@@ -36,6 +37,9 @@ install_tool_if_missing() {
   if [[ "$tool" == "terraform" ]]; then brew tap hashicorp/tap >/dev/null; fi
   echo "Installing $tool via Homebrew..."
   brew install "$formula"
+  if [[ "$tool" == "psql" ]]; then
+    brew link --force libpq >/dev/null
+  fi
 }
 
 for tool in "$@"; do install_tool_if_missing "$tool"; done
