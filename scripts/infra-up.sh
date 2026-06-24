@@ -12,6 +12,9 @@ trap 'print_recovery_hint' INT
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INFRA_DIR="$ROOT_DIR/infra"
 START_TS="$(date +%s)"
+NAME_PREFIX="${TF_VAR_name_prefix:-dash-test}"
+DB_INSTANCE_ID="${NAME_PREFIX}-db"
+DB_SUBNET_GROUP="${NAME_PREFIX}-subnet-group"
 
 elapsed() {
   local now
@@ -24,10 +27,64 @@ step() {
   printf '    ETA: %s\n' "$2"
 }
 
-step "1/6 Checking local dependencies: terraform and aws CLI." "< 1 min"
+state_has() {
+  terraform state list 2>/dev/null | grep -qx "$1"
+}
+
+rds_instance_status() {
+  aws rds describe-db-instances \
+    --db-instance-identifier "$DB_INSTANCE_ID" \
+    --query 'DBInstances[0].DBInstanceStatus' \
+    --output text 2>/dev/null || true
+}
+
+delete_unmanaged_rds_instance() {
+  local status
+  status="$(rds_instance_status)"
+  if [[ -z "$status" || "$status" == "None" ]]; then
+    echo "No unmanaged RDS instance named $DB_INSTANCE_ID found."
+    return
+  fi
+
+  if state_has aws_db_instance.pg; then
+    echo "RDS instance $DB_INSTANCE_ID is already managed by Terraform state."
+    return
+  fi
+
+  if [[ "$status" != "deleting" ]]; then
+    echo "Deleting unmanaged RDS instance $DB_INSTANCE_ID (status: $status)."
+    aws rds delete-db-instance \
+      --db-instance-identifier "$DB_INSTANCE_ID" \
+      --skip-final-snapshot \
+      --delete-automated-backups >/dev/null
+  else
+    echo "Unmanaged RDS instance $DB_INSTANCE_ID is already deleting."
+  fi
+
+  echo "Waiting for unmanaged RDS instance $DB_INSTANCE_ID to be deleted."
+  aws rds wait db-instance-deleted --db-instance-identifier "$DB_INSTANCE_ID"
+}
+
+delete_unmanaged_db_subnet_group() {
+  if ! aws rds describe-db-subnet-groups \
+    --db-subnet-group-name "$DB_SUBNET_GROUP" >/dev/null 2>&1; then
+    echo "No unmanaged RDS subnet group named $DB_SUBNET_GROUP found."
+    return
+  fi
+
+  if state_has aws_db_subnet_group.pg; then
+    echo "RDS subnet group $DB_SUBNET_GROUP is already managed by Terraform state."
+    return
+  fi
+
+  echo "Deleting unmanaged RDS subnet group $DB_SUBNET_GROUP."
+  aws rds delete-db-subnet-group --db-subnet-group-name "$DB_SUBNET_GROUP"
+}
+
+step "1/7 Checking local dependencies: terraform and aws CLI." "< 1 min"
 "$ROOT_DIR/scripts/bootstrap-deps.sh" terraform aws
 
-step "2/6 Detecting your current public IP for the RDS security group." "< 10 sec"
+step "2/7 Detecting your current public IP for the RDS security group." "< 10 sec"
 MY_IP="$(curl -fsSL https://checkip.amazonaws.com || true)"
 if [[ -n "$MY_IP" ]]; then
   ALLOWED_CIDR="${MY_IP}/32"
@@ -37,14 +94,18 @@ fi
 echo "Locking DB access to allowed_cidr=$ALLOWED_CIDR"
 
 cd "$INFRA_DIR"
-step "3/6 Initializing Terraform providers/state." "< 1 min"
+step "3/7 Initializing Terraform providers/state." "< 1 min"
 terraform init -input=false
 
-step "4/6 Applying AWS infra: VPC, subnets, route table, security group, and RDS Postgres." "5-10 min for a new RDS instance; usually < 2 min when already created"
+step "4/7 Clearing unmanaged RDS leftovers with the dashboard resource names." "5-10 min only if a previous RDS instance is still deleting"
+delete_unmanaged_rds_instance
+delete_unmanaged_db_subnet_group
+
+step "5/7 Applying AWS infra: VPC, subnets, route table, security group, and RDS Postgres." "5-10 min for a new RDS instance; usually < 2 min when already created"
 echo "    Terraform is idempotent: it creates missing pieces and leaves healthy existing pieces alone."
 terraform apply -auto-approve -input=false -var "allowed_cidr=$ALLOWED_CIDR"
 
-step "5/6 Reading Terraform outputs and writing .env.rds." "< 10 sec"
+step "6/7 Reading Terraform outputs and writing .env.rds." "< 10 sec"
 DATABASE_URL="$(terraform output -raw database_url)"
 DB_HOST="$(terraform output -raw db_endpoint)"
 DB_PORT="$(terraform output -raw db_port)"
@@ -61,7 +122,7 @@ PGUSER=$DB_USER
 EOF
 
 printf '\nWrote %s (DATABASE_URL + PG* vars).\n' "$ROOT_DIR/.env.rds"
-step "6/6 Checking whether Quick Order is already running on :3005." "< 10 sec"
+step "7/7 Checking whether Quick Order is already running on :3005." "< 10 sec"
 if curl -fsS --max-time 2 http://localhost:3005 >/dev/null 2>&1; then
   echo "Quick Order is already active at http://localhost:3005."
 else

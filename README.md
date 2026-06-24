@@ -11,6 +11,7 @@ scripts handle the database connection details.
 
 This creates or repairs the AWS pieces: VPC, subnets, route table, security
 group, and RDS Postgres. It is safe to rerun. It prints each step and an ETA.
+It also clears stale dashboard-named RDS leftovers before recreating infra.
 
 Expected infra timing:
 
