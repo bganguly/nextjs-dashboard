@@ -114,9 +114,8 @@ const compactNumber = (n: number): string => {
 };
 
 interface ChartProps {
-  /** Retained for API compatibility. The chart no longer refetches on SSE — see
-   *  `lastSseOrder` for in-place patching (Task 16). Only user-driven changes
-   *  (filters / search / brush) trigger a fetch. */
+  /** Bumped by the parent when an order event arrives. The chart keeps the
+   * existing bars mounted while the authoritative aggregate refresh completes. */
   refreshSignal?: number;
   /** Last SSE order, applied as an in-place increment to the matching day's
    *  category bucket instead of triggering a full refetch (Task 16). This avoids
@@ -172,6 +171,7 @@ function defaultRange(): { from: string; to: string } {
 }
 
 export default function Chart({
+  refreshSignal = 0,
   endpoint = "/api/aggregates",
   topN = DEFAULT_TOP_N,
   filters,
@@ -241,9 +241,9 @@ export default function Chart({
     [endpoint, topN, filters, searchQuery],
   );
 
-  // Initial load + refetch on user-driven changes only (filters / search via
-  // fetchAggregates' identity). SSE orders are patched in place below, NOT
-  // refetched — that full refetch was the cause of the chart FOUC (Task 16).
+  // Initial load + refetch on user-driven changes and order events. The fetch
+  // path intentionally does not clear rawData, so SSE refreshes update the chart
+  // without the old blank/flicker behavior.
   useEffect(() => {
     if (isControlled) return;
     // Kicks off an async fetch (which toggles loading state); intentional.
@@ -251,7 +251,7 @@ export default function Chart({
     fetchAggregates(range.from, range.to);
     // range.from/range.to intentionally omitted: drag handles its own fetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchAggregates, isControlled]);
+  }, [fetchAggregates, isControlled, refreshSignal]);
 
   useEffect(() => {
     if (!isControlled) return;
