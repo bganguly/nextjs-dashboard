@@ -18,20 +18,34 @@ Expected infra timing:
 - New RDS instance: usually 5-10 minutes
 - Destroying RDS: usually 5-10 minutes
 
-## 2. Start Dashboard On 3004
+## 2. Prepare Demo Data
 
 ```bash
 npm install
-./scripts/start-dashboard.sh
+./scripts/prepare-demo-data.sh
 ```
 
-`start-dashboard.sh`:
+`prepare-demo-data.sh`:
 
 - Finds the database URL using `scripts/database-url.sh`
 - Applies the Prisma schema and dashboard SQL migrations
 - Seeds the full demo data when the orders table is empty
 - Rebuilds the dashboard read models for fast list and chart results
-- Starts the dashboard at http://localhost:3004
+
+## 3. Start Dashboard On 3004
+
+```bash
+npm run dev
+```
+
+`npm run dev` starts the combined dashboard backend and UI at
+http://localhost:3004.
+
+This equivalent helper also resolves `DATABASE_URL` first:
+
+```bash
+./scripts/start-dashboard.sh
+```
 
 If you only want to print the database URL:
 
@@ -39,7 +53,7 @@ If you only want to print the database URL:
 ./scripts/database-url.sh
 ```
 
-## 3. Start Quick Order On 3005
+## 4. Start Quick Order On 3005
 
 Quick Order is a separate repo pushed to `bganguly/nextjs-websocket`.
 
