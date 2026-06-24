@@ -194,6 +194,7 @@ export default function Chart({
   // Category whose chart bar should briefly flash (brightness pop) after an SSE
   // order lands (Task 17) — the visible companion to the in-place patch above.
   const [flashSlug, setFlashSlug] = useState<string | null>(null);
+  const [showOthers, setShowOthers] = useState(false);
 
   // Abort in-flight requests so rapid drags don't race each other.
   const abortRef = useRef<AbortController | null>(null);
@@ -415,8 +416,10 @@ export default function Chart({
   // the first <Bar> at the BOTTOM, so largest-first puts the largest at the
   // bottom and the smallest on top; the legend reads the same order left-to-right.
   const seriesKeys = useMemo(
-    () => seriesRanked.map((s) => s.key),
-    [seriesRanked],
+    () => seriesRanked
+      .filter((s) => showOthers || s.key !== OTHER_KEY)
+      .map((s) => s.key),
+    [seriesRanked, showOthers],
   );
 
   // Color per top category (by rank), with a fixed neutral for "Other".
@@ -551,22 +554,39 @@ export default function Chart({
               // right in the exact same order as the totals row (both ranked),
               // instead of whatever order recharts would pick internally.
               content={() => (
-                <ul className="flex flex-wrap justify-center gap-x-4 gap-y-1 pt-2">
-                  {seriesKeys.map((key) => (
-                    <li
-                      key={key}
-                      className="inline-flex items-center gap-1.5 text-xs"
+                <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 pt-2 text-xs">
+                  <ul className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
+                    {seriesKeys.map((key) => (
+                      <li
+                        key={key}
+                        className="inline-flex items-center gap-1.5"
+                        style={{ color: axisColor }}
+                      >
+                        <span
+                          aria-hidden
+                          className="h-2.5 w-2.5 shrink-0 rounded-sm"
+                          style={{ backgroundColor: colorFor(key) }}
+                        />
+                        {key}
+                      </li>
+                    ))}
+                  </ul>
+                  {withOther && (
+                    <label
+                      className="inline-flex cursor-pointer items-center gap-1.5"
                       style={{ color: axisColor }}
                     >
-                      <span
-                        aria-hidden
-                        className="h-2.5 w-2.5 shrink-0 rounded-sm"
-                        style={{ backgroundColor: colorFor(key) }}
+                      <input
+                        type="checkbox"
+                        checked={showOthers}
+                        onChange={(e) => setShowOthers(e.target.checked)}
+                        className="h-3.5 w-3.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                        data-testid="chart-show-others"
                       />
-                      {key}
-                    </li>
-                  ))}
-                </ul>
+                      Others
+                    </label>
+                  )}
+                </div>
               )}
             />
             {pulseDate && (
