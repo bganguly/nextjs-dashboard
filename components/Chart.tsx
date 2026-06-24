@@ -411,13 +411,11 @@ export default function Chart({
     return entries.sort((a, b) => b.orders - a.orders);
   }, [categoryTotals, topCategories, withOther]);
 
-  // Stack/legend order: ranked top categories only — "Others" is intentionally
-  // excluded from the bars and legend (it still appears in the totals row).
-  // recharts draws the first <Bar> at the BOTTOM, so largest-first puts the
-  // largest at the bottom and the smallest on top; the legend reads the same
-  // order left-to-right.
+  // Stack/legend order: ranked top categories plus "Others". Recharts draws
+  // the first <Bar> at the BOTTOM, so largest-first puts the largest at the
+  // bottom and the smallest on top; the legend reads the same order left-to-right.
   const seriesKeys = useMemo(
-    () => seriesRanked.filter((s) => s.key !== OTHER_KEY).map((s) => s.key),
+    () => seriesRanked.map((s) => s.key),
     [seriesRanked],
   );
 
