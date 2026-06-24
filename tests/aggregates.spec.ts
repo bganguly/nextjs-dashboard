@@ -80,6 +80,33 @@ async function dragRange(page: Page): Promise<boolean> {
 }
 
 test.describe("aggregates", () => {
+  test("from-only date filters use today as the end date", async ({ request }) => {
+    const params = new URLSearchParams({
+      q: "ito",
+      from: "2026-06-22",
+      pageSize: "1",
+    });
+
+    const [ordersRes, aggregatesRes] = await Promise.all([
+      request.get(`/api/orders?${params.toString()}`),
+      request.get(`/api/aggregates?${params.toString()}`),
+    ]);
+
+    expect(ordersRes.ok(), await ordersRes.text()).toBeTruthy();
+    expect(aggregatesRes.ok(), await aggregatesRes.text()).toBeTruthy();
+
+    const orders = await ordersRes.json();
+    const aggregates = await aggregatesRes.json();
+    const aggregateTotal = aggregates.data.reduce(
+      (sum: number, day: { totals?: { totalOrders?: number } }) =>
+        sum + (day.totals?.totalOrders ?? 0),
+      0,
+    );
+
+    expect(orders.total).toBeGreaterThan(0);
+    expect(aggregateTotal).toBe(orders.total);
+  });
+
   test("lowercase status filters match list and chart aggregates", async ({ request }) => {
     const params = new URLSearchParams({
       status: "shipped,refunded",
