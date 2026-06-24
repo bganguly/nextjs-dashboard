@@ -79,7 +79,159 @@ async function dragRange(page: Page): Promise<boolean> {
   return false;
 }
 
+function aggregateTotal(data: Array<{ totals?: { totalOrders?: number } }>): number {
+  return data.reduce((sum, day) => sum + (day.totals?.totalOrders ?? 0), 0);
+}
+
 test.describe("aggregates", () => {
+  test("from-only date filters use today as the end date", async ({ request }) => {
+    const params = new URLSearchParams({
+      q: "ito",
+      from: "2026-06-22",
+      pageSize: "1",
+    });
+
+    const [ordersRes, aggregatesRes] = await Promise.all([
+      request.get(`/api/orders?${params.toString()}`),
+      request.get(`/api/aggregates?${params.toString()}`),
+    ]);
+
+    expect(ordersRes.ok(), await ordersRes.text()).toBeTruthy();
+    expect(aggregatesRes.ok(), await aggregatesRes.text()).toBeTruthy();
+
+    const orders = await ordersRes.json();
+    const aggregates = await aggregatesRes.json();
+    const aggregateCount = aggregateTotal(aggregates.data);
+    const allDaysReconcile = aggregates.data.every(
+      (day: {
+        categories: Record<string, { totalOrders?: number }>;
+        totals?: { totalOrders?: number };
+      }) => {
+        const categoryTotal = Object.values(day.categories).reduce(
+          (sum, category) => sum + (category.totalOrders ?? 0),
+          0,
+        );
+        return categoryTotal === (day.totals?.totalOrders ?? 0);
+      },
+    );
+
+    expect(orders.total).toBeGreaterThan(0);
+    expect(aggregateCount).toBe(orders.total);
+    expect(allDaysReconcile).toBeTruthy();
+  });
+
+  test("new notes-only matches invalidate aggregate text probes", async ({ request }) => {
+    const token = `gupta-${Date.now()}`;
+    const params = new URLSearchParams({
+      q: token,
+      from: "2026-06-22",
+      to: new Date().toISOString().slice(0, 10),
+      pageSize: "1",
+    });
+
+    const beforeRes = await request.get(`/api/aggregates?${params.toString()}`);
+    expect(beforeRes.ok(), await beforeRes.text()).toBeTruthy();
+    expect(aggregateTotal((await beforeRes.json()).data)).toBe(0);
+
+    const createRes = await request.post("/api/orders", {
+      data: {
+        customerId: 26,
+        regionId: 1,
+        currency: "USD",
+        notes: `${token} gain`,
+        items: [{ productId: 558, quantity: 1, unitPrice: 22.22, discount: 0 }],
+      },
+    });
+    expect(createRes.ok(), await createRes.text()).toBeTruthy();
+
+    const [ordersRes, aggregatesRes] = await Promise.all([
+      request.get(`/api/orders?${params.toString()}`),
+      request.get(`/api/aggregates?${params.toString()}`),
+    ]);
+    expect(ordersRes.ok(), await ordersRes.text()).toBeTruthy();
+    expect(aggregatesRes.ok(), await aggregatesRes.text()).toBeTruthy();
+
+    const orders = await ordersRes.json();
+    const aggregates = await aggregatesRes.json();
+    expect(orders.total).toBe(1);
+    expect(aggregateTotal(aggregates.data)).toBe(1);
+  });
+
+  test("from-only chart renders rolled-up other buckets", async ({ page, request }) => {
+    const params = new URLSearchParams({
+      q: "ito",
+      from: "2026-06-22",
+    });
+    const aggregatesRes = await request.get(`/api/aggregates?${params.toString()}`);
+    expect(aggregatesRes.ok(), await aggregatesRes.text()).toBeTruthy();
+    const aggregates = await aggregatesRes.json();
+    const daysWithOther = aggregates.data.filter(
+      (day: { categories?: Record<string, unknown> }) =>
+        Object.prototype.hasOwnProperty.call(day.categories ?? {}, "Others"),
+    ).length;
+
+    expect(daysWithOther).toBeGreaterThan(0);
+
+    await page.goto("/");
+    await page.getByTestId("search-input").fill("ito");
+    await page.getByTestId("search-input").press("Enter");
+    await page.locator("input[type='date']").first().fill("2026-06-22");
+
+    const othersBars = page.locator("[data-testid='chart-bar'][data-category='Others']");
+    const showOthers = page.getByTestId("chart-show-others");
+
+    await expect(showOthers).toBeVisible();
+    await expect(showOthers).not.toBeChecked();
+    await expect(othersBars).toHaveCount(0);
+
+    await showOthers.check();
+
+    await expect
+      .poll(
+        async () => othersBars.count(),
+        {
+          message: "rolled-up Others buckets did not render after enabling them",
+          timeout: 10_000,
+        },
+      )
+      .toBeGreaterThanOrEqual(daysWithOther);
+  });
+
+  test("lowercase status filters match list and chart aggregates", async ({ request }) => {
+    const params = new URLSearchParams({
+      status: "shipped,refunded",
+      regionCode: "R42",
+      from: "2026-06-22",
+      to: "2026-06-22",
+      q: "ito",
+      pageSize: "5",
+    });
+
+    const [ordersRes, aggregatesRes] = await Promise.all([
+      request.get(`/api/orders?${params.toString()}`),
+      request.get(`/api/aggregates?${params.toString()}`),
+    ]);
+
+    expect(ordersRes.ok(), await ordersRes.text()).toBeTruthy();
+    expect(aggregatesRes.ok(), await aggregatesRes.text()).toBeTruthy();
+
+    const orders = await ordersRes.json();
+    const aggregates = await aggregatesRes.json();
+    const aggregateTotal = aggregates.data.reduce(
+      (sum: number, day: { totals?: { totalOrders?: number } }) =>
+        sum + (day.totals?.totalOrders ?? 0),
+      0,
+    );
+
+    expect(orders.total).toBeGreaterThan(0);
+    expect(aggregateTotal).toBe(orders.total);
+    expect(
+      orders.data.every((row: { status: string; region?: { code?: string } }) =>
+        ["SHIPPED", "REFUNDED"].includes(row.status) && row.region?.code === "R42",
+      ),
+    ).toBeTruthy();
+  });
+
   test("dragging the date range updates the chart data", async ({ page }) => {
     await page.goto("/");
 
