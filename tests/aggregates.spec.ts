@@ -102,9 +102,22 @@ test.describe("aggregates", () => {
         sum + (day.totals?.totalOrders ?? 0),
       0,
     );
+    const allDaysReconcile = aggregates.data.every(
+      (day: {
+        categories: Record<string, { totalOrders?: number }>;
+        totals?: { totalOrders?: number };
+      }) => {
+        const categoryTotal = Object.values(day.categories).reduce(
+          (sum, category) => sum + (category.totalOrders ?? 0),
+          0,
+        );
+        return categoryTotal === (day.totals?.totalOrders ?? 0);
+      },
+    );
 
     expect(orders.total).toBeGreaterThan(0);
     expect(aggregateTotal).toBe(orders.total);
+    expect(allDaysReconcile).toBeTruthy();
   });
 
   test("lowercase status filters match list and chart aggregates", async ({ request }) => {
