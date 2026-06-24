@@ -19,7 +19,7 @@ import {
 import { resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 
-const ROOT = process.cwd(); // start-bot.sh cd's to the wt-testing root
+const ROOT = process.cwd();
 const SCRIPTS = resolve(ROOT, "scripts");
 const STATUS_DIR = resolve(ROOT, "..", "STATUS");
 const STATE_FILE = resolve(SCRIPTS, ".bot-state.json");
@@ -58,14 +58,29 @@ if (!TOKEN || !CHAT_ID) {
   process.exit(1);
 }
 
-async function tg(method: string, body?: unknown): Promise<any> {
+interface TelegramMessage {
+  chat?: { id?: number | string };
+  text?: string;
+}
+
+interface TelegramUpdate {
+  update_id: number;
+  message?: TelegramMessage;
+  edited_message?: TelegramMessage;
+}
+
+interface TelegramResponse<T> {
+  result?: T;
+}
+
+async function tg<T = unknown>(method: string, body?: unknown): Promise<T> {
   const res = await fetch(`${API}/${method}`, {
     method: body ? "POST" : "GET",
     headers: body ? { "Content-Type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
     signal: AbortSignal.timeout(35_000),
   });
-  return res.json();
+  return res.json() as Promise<T>;
 }
 
 async function send(text: string): Promise<void> {
@@ -454,8 +469,8 @@ async function main(): Promise<void> {
   // messages — set the offset just past the latest pending update.
   if (!state.offset) {
     try {
-      const r = await tg("getUpdates");
-      const ids = (r.result ?? []).map((u: any) => u.update_id as number);
+      const r = await tg<TelegramResponse<TelegramUpdate[]>>("getUpdates");
+      const ids = (r.result ?? []).map((u) => u.update_id);
       state.offset = ids.length ? Math.max(...ids) + 1 : 0;
       saveState(state);
     } catch (err) {
@@ -467,9 +482,11 @@ async function main(): Promise<void> {
 
   for (;;) {
     try {
-      const r = await tg(`getUpdates?offset=${state.offset}&timeout=25`);
+      const r = await tg<TelegramResponse<TelegramUpdate[]>>(
+        `getUpdates?offset=${state.offset}&timeout=25`,
+      );
       for (const u of r.result ?? []) {
-        state.offset = (u.update_id as number) + 1;
+        state.offset = u.update_id + 1;
         const msg = u.message ?? u.edited_message;
         if (!msg || String(msg.chat?.id) !== CHAT_ID) continue; // only our chat
         const text = msg.text ?? "";

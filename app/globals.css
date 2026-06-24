@@ -1,8 +1,17 @@
 @import "tailwindcss";
 
+/* Class-based dark mode (Tailwind v4): `dark:` variants respond to a `.dark`
+   class on an ancestor (we toggle it on <html>) instead of prefers-color-scheme. */
+@custom-variant dark (&:is(.dark *));
+
 :root {
   --background: #ffffff;
   --foreground: #171717;
+}
+
+.dark {
+  --background: #0a0a0a;
+  --foreground: #ededed;
 }
 
 @theme inline {
@@ -12,15 +21,157 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+/* New-order row insert: a brief slide-down from the top plus an indigo
+   highlight that fades back to the row's normal background. */
+@keyframes row-insert {
+  0% {
+    transform: translateY(-8px);
+    opacity: 0;
+    background-color: rgb(99 102 241 / 0.18);
+  }
+  35% {
+    transform: translateY(0);
+    opacity: 1;
+    background-color: rgb(99 102 241 / 0.18);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.row-insert {
+  animation: row-insert 1.6s ease-out;
+}
+
+/* Affected aggregate bucket: a soft pulsing ring on the date marker. */
+@keyframes bucket-pulse {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+.bucket-pulse {
+  animation: bucket-pulse 0.9s ease-in-out 3;
+}
+
+/* New-order row entry (Task 13): a quick slide-down + fade-in applied to the
+   first row when its order id changes after an SSE refresh. `data-new` is set
+   for ~600ms then cleared. */
+[data-new="true"] {
+  animation: row-enter 0.5s ease-out;
+}
+
+@keyframes row-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Affected aggregate tile (Task 14, amended by Task 17): a notification-badge
+   style pop — a quick scale bump + bright blue highlight that overshoots and
+   snaps back, so the changed tile is unmistakable. transform-origin:center keeps
+   the scale centered; the tile must not be clipped (its row uses overflow-x but
+   the small overshoot stays within the row's vertical padding). */
+[data-updating="true"] {
+  animation: tile-pop 0.55s cubic-bezier(0.36, 0.07, 0.19, 0.97);
+  transform-origin: center;
+}
+
+@keyframes tile-pop {
+  0% {
+    transform: scale(1);
+    background-color: inherit;
+  }
+  20% {
+    transform: scale(1.06);
+    background-color: rgb(59 130 246 / 0.3);
+  }
+  45% {
+    transform: scale(0.97);
+    background-color: rgb(59 130 246 / 0.2);
+  }
+  65% {
+    transform: scale(1.02);
+    background-color: rgb(59 130 246 / 0.12);
+  }
+  100% {
+    transform: scale(1);
+    background-color: inherit;
+  }
+}
+
+/* Affected chart bar (Task 17): a brightness pop on the bar whose category just
+   received an SSE order — the visible companion to the in-place patch. Applied
+   to the wrapping <g> recharts renders each bar's rect inside. */
+[data-flash="true"] {
+  animation: bar-pop 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97);
+  filter: brightness(1.4);
+}
+
+@keyframes bar-pop {
+  0% {
+    filter: brightness(1);
+  }
+  25% {
+    filter: brightness(1.6);
+  }
+  100% {
+    filter: brightness(1);
+  }
+}
+
+/* Chart refetch indicator (Task 15): a thin sweeping bar at the top edge of the
+   chart container while it reloads after an SSE event. The container is
+   position:relative + overflow:hidden so this clips to its bounds. */
+[data-testid="chart"][data-loading="true"]::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #3b82f6, transparent);
+  animation: chart-loading 1s linear infinite;
+}
+
+@keyframes chart-loading {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row-insert,
+  .bucket-pulse,
+  [data-new="true"],
+  [data-updating="true"],
+  [data-flash="true"],
+  [data-testid="chart"][data-loading="true"]::before {
+    animation: none;
+  }
+  /* No motion AND no lingering scale/brightness when reduced motion is on. */
+  [data-updating="true"] {
+    transform: none;
+  }
+  [data-flash="true"] {
+    filter: none;
+  }
 }

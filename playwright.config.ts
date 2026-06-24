@@ -1,13 +1,12 @@
 import { defineConfig, devices } from "@playwright/test";
 
 /**
- * Playwright config for the testing worktree.
+ * Playwright config for the merged dashboard app.
  *
- * The frontend under test is expected to run at BASE_URL (default
- * http://localhost:3000). watch.ts re-runs these specs whenever the
- * backend/frontend worktrees change.
+ * The app under test is expected to run at BASE_URL. The merged dashboard
+ * defaults to port 3004 to match npm run dev.
  */
-const BASE_URL = process.env.BASE_URL ?? "http://localhost:3003";
+const BASE_URL = process.env.BASE_URL ?? "http://localhost:3004";
 
 export default defineConfig({
   testDir: "./tests",

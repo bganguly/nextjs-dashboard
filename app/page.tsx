@@ -1,63 +1,187 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import { useCallback, useEffect, useState } from "react";
+import Chart from "@/components/Chart";
+import SearchTable, { type SearchRow } from "@/components/SearchTable";
+import LiveFeed, { type LiveEvent } from "@/components/LiveFeed";
+import ThemeToggle from "@/components/ThemeToggle";
+import FilterSidebar, {
+  EMPTY_FILTERS,
+  type OrderFilters,
+  type RegionOption,
+} from "@/components/FilterSidebar";
+
+/** Merge new regions into the list by code (name wins if present), sorted. */
+function mergeRegions(
+  prev: RegionOption[],
+  incoming: RegionOption[],
+): RegionOption[] {
+  const map = new Map(prev.map((r) => [r.code, r]));
+  let changed = false;
+  for (const r of incoming) {
+    if (!r?.code) continue;
+    const existing = map.get(r.code);
+    const name = r.name || existing?.name || r.code;
+    if (!existing || existing.name !== name) {
+      map.set(r.code, { code: r.code, name });
+      changed = true;
+    }
+  }
+  if (!changed) return prev;
+  return [...map.values()].sort((a, b) => a.code.localeCompare(b.code));
+}
+
+/**
+ * Dashboard shell. A single SSE connection lives in LiveFeed; each event bumps
+ * `refreshSignal`, which Chart and SearchTable watch to refetch their current
+ * views. This keeps one EventSource for the whole page instead of one per panel.
+ *
+ * The filter sidebar's state lives here and is passed to SearchTable, which
+ * sends it to /api/orders. Region options have no dedicated endpoint, so they
+ * are discovered from the order rows SearchTable reports via `onRows`.
+ */
+/** Local date (YYYY-MM-DD) for an event's timestamp, matching the chart's
+ *  bucket keys. Falls back to "now" when the event carries no usable time. */
+function eventDay(raw: unknown): string | undefined {
+  const d = raw != null ? new Date(raw as string) : new Date();
+  if (Number.isNaN(d.getTime())) return undefined;
+  const tzMs = d.getTime() - d.getTimezoneOffset() * 60_000;
+  return new Date(tzMs).toISOString().slice(0, 10);
+}
+
+export default function Dashboard() {
+  const [refreshSignal, setRefreshSignal] = useState(0);
+  const [filters, setFilters] = useState<OrderFilters>(EMPTY_FILTERS);
+  const [regionOptions, setRegionOptions] = useState<RegionOption[]>([]);
+  // Active search query, lifted from SearchTable so the chart can match it.
+  const [searchQuery, setSearchQuery] = useState("");
+  // Category whose aggregate tile should briefly pulse after an SSE order.
+  const [updatingSlug, setUpdatingSlug] = useState<string | null>(null);
+  // Last SSE order, used to patch the chart's bars IN PLACE (Task 16) instead of
+  // refetching — refetching cleared the bars and caused the FOUC / layout bounce.
+  const [lastSseOrder, setLastSseOrder] = useState<{
+    categorySlug: string;
+    placedAt: string;
+  } | null>(null);
+  // Most recent order event, used to target the row + chart-bucket animations.
+  const [lastOrder, setLastOrder] = useState<{
+    id?: string | number;
+    date?: string;
+    seq: number;
+  } | null>(null);
+
+  const handleEvent = useCallback((event: LiveEvent) => {
+    // Only order events carry an id — heartbeats and connected events don't, and
+    // must NOT trigger a refetch (otherwise the list repaints on every beat).
+    if (event.id == null) return;
+    const id = event.id;
+    const date = eventDay(event.placedAt ?? event.timestamp);
+    setRefreshSignal((n) => {
+      setLastOrder({ id, date, seq: n + 1 });
+      return n + 1;
+    });
+    // Pulse only the affected category's aggregate tile (Task 14). Depends on
+    // wt1 including `categorySlug` on the SSE order payload; absent it, no tile
+    // pulses (the rest of the refresh still runs).
+    const slug =
+      typeof event.categorySlug === "string" ? event.categorySlug : null;
+    if (slug) {
+      setUpdatingSlug(slug);
+      setTimeout(() => setUpdatingSlug(null), 500);
+      // Hand the chart an in-place patch instead of a refetch (Task 16). Pass
+      // the SAME normalized local day used for the bucket pulse so the patch and
+      // pulse target the same bar (Chart slices placedAt to 10 chars). Fall back
+      // to the raw timestamp only when the day couldn't be derived. A fresh
+      // object every time so the patch effect fires for repeat categories too.
+      const placedAt =
+        date ??
+        (typeof event.placedAt === "string"
+          ? event.placedAt
+          : typeof event.timestamp === "string"
+            ? event.timestamp
+            : "");
+      setLastSseOrder({ categorySlug: slug, placedAt });
+    }
+  }, []);
+
+  // Prefer the full region list (with display names) from /api/regions. If that
+  // endpoint isn't available we fall back to codes discovered from order rows.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/regions")
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`${r.status}`))))
+      .then((data: RegionOption[]) => {
+        if (cancelled || !Array.isArray(data)) return;
+        setRegionOptions((prev) => mergeRegions(prev, data));
+      })
+      .catch(() => {
+        /* no regions endpoint — handleRows discovery covers it */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Discover region codes from loaded orders (fallback / supplement; uses the
+  // region name from the row when present, else the code).
+  const handleRows = useCallback((rows: SearchRow[]) => {
+    const incoming: RegionOption[] = [];
+    for (const row of rows) {
+      const region = row.region as { code?: string; name?: string } | undefined;
+      if (region?.code) {
+        incoming.push({ code: region.code, name: region.name ?? region.code });
+      }
+    }
+    if (incoming.length === 0) return;
+    setRegionOptions((prev) => mergeRegions(prev, incoming));
+  }, []);
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+    <div className="min-h-screen bg-zinc-50 font-sans dark:bg-black">
+      <main className="w-full px-5 py-8">
+        <header className="mb-6 flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+            <p className="text-sm text-gray-500">
+              Live aggregates, search, and event stream.
+            </p>
+          </div>
+          <ThemeToggle />
+        </header>
+
+        <div className="flex flex-col gap-6 lg:flex-row">
+          <FilterSidebar
+            value={filters}
+            onChange={setFilters}
+            regionOptions={regionOptions}
+          />
+
+          <div className="min-w-0 flex-1">
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+              <div className="space-y-6 lg:col-span-2">
+                <Chart
+                  refreshSignal={refreshSignal}
+                  filters={filters}
+                  searchQuery={searchQuery}
+                  highlightDate={lastOrder?.date}
+                  highlightKey={lastOrder?.seq}
+                  updatingSlug={updatingSlug}
+                  lastSseOrder={lastSseOrder}
+                />
+                <SearchTable
+                  refreshSignal={refreshSignal}
+                  filters={filters}
+                  onRows={handleRows}
+                  onQueryChange={setSearchQuery}
+                  highlightId={lastOrder?.id}
+                  highlightKey={lastOrder?.seq}
+                />
+              </div>
+              <div className="lg:col-span-1">
+                <LiveFeed onEvent={handleEvent} />
+              </div>
+            </div>
+          </div>
         </div>
       </main>
     </div>
