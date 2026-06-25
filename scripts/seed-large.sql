@@ -6,6 +6,7 @@
 \set products 5000
 \set categories 200
 \set regions 50
+\set batch_size 500000
 \set summary_days 30
 \set summary_cats 10
 \set summary_regions 10
@@ -37,24 +38,66 @@ SELECT 'customer' || g || '@example.com',
        1 + floor(random() * :regions)::int, now(), now()
 FROM generate_series(1, :customers) g;
 
-\echo Seeding :orders orders (this is the big one)...
-INSERT INTO orders ("customerId", "regionId", status, total, currency, notes, "placedAt", "updatedAt")
-SELECT 1 + floor(random() * :customers)::int,
-       1 + floor(random() * :regions)::int,
-       (ARRAY['PENDING','CONFIRMED','PROCESSING','SHIPPED','DELIVERED','CANCELLED','REFUNDED'])[1 + floor(random() * 7)]::"OrderStatus",
-       round((random() * 500 + 10)::numeric, 2),
-       'USD',
-       'order ' || g,
-       now() - (random() * 30) * interval '1 day',
-       now()
-FROM generate_series(1, :orders) g;
+\echo Seeding :orders orders in batches of :batch_size...
+DO $$
+DECLARE
+  total_orders integer := :orders;
+  batch_size integer := :batch_size;
+  start_id integer := 1;
+  end_id integer;
+  batch_started timestamptz;
+BEGIN
+  WHILE start_id <= total_orders LOOP
+    end_id := LEAST(start_id + batch_size - 1, total_orders);
+    batch_started := clock_timestamp();
 
-\echo Seeding order_items (1 per order)...
-INSERT INTO order_items ("orderId", "productId", quantity, "unitPrice", discount)
-SELECT g, 1 + floor(random() * :products)::int,
-       1 + floor(random() * 3)::int,
-       round((random() * 100 + 5)::numeric, 2), 0
-FROM generate_series(1, :orders) g;
+    INSERT INTO orders ("customerId", "regionId", status, total, currency, notes, "placedAt", "updatedAt")
+    SELECT 1 + floor(random() * :customers)::int,
+           1 + floor(random() * :regions)::int,
+           (ARRAY['PENDING','CONFIRMED','PROCESSING','SHIPPED','DELIVERED','CANCELLED','REFUNDED'])[1 + floor(random() * 7)]::"OrderStatus",
+           round((random() * 500 + 10)::numeric, 2),
+           'USD',
+           'order ' || g,
+           now() - (random() * 30) * interval '1 day',
+           now()
+    FROM generate_series(start_id, end_id) g;
+
+    RAISE NOTICE 'orders loaded through % / % in %',
+      end_id,
+      total_orders,
+      clock_timestamp() - batch_started;
+
+    start_id := end_id + 1;
+  END LOOP;
+END $$;
+
+\echo Seeding order_items in batches of :batch_size...
+DO $$
+DECLARE
+  total_orders integer := :orders;
+  batch_size integer := :batch_size;
+  start_id integer := 1;
+  end_id integer;
+  batch_started timestamptz;
+BEGIN
+  WHILE start_id <= total_orders LOOP
+    end_id := LEAST(start_id + batch_size - 1, total_orders);
+    batch_started := clock_timestamp();
+
+    INSERT INTO order_items ("orderId", "productId", quantity, "unitPrice", discount)
+    SELECT g, 1 + floor(random() * :products)::int,
+           1 + floor(random() * 3)::int,
+           round((random() * 100 + 5)::numeric, 2), 0
+    FROM generate_series(start_id, end_id) g;
+
+    RAISE NOTICE 'order_items loaded through % / % in %',
+      end_id,
+      total_orders,
+      clock_timestamp() - batch_started;
+
+    start_id := end_id + 1;
+  END LOOP;
+END $$;
 
 \echo Seeding daily_summary (for the chart)...
 INSERT INTO daily_summary (date, "categoryId", "categoryName", "regionId", "regionCode",

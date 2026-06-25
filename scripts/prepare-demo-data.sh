@@ -6,6 +6,7 @@ cd "$ROOT_DIR"
 
 START_TS="$(date +%s)"
 DEMO_ORDER_COUNT="${DEMO_ORDER_COUNT:-4000000}"
+SEED_BATCH_SIZE="${SEED_BATCH_SIZE:-500000}"
 STEP_TS="$START_TS"
 
 elapsed() {
@@ -71,8 +72,11 @@ print_summary "Current data summary:"
 step_done
 
 if [[ "$ORDER_COUNT" == "0" ]]; then
-  step "3/5 Seeding full demo data: $DEMO_ORDER_COUNT orders." "several minutes for millions of rows"
-  psql "$DATABASE_URL" -v orders="$DEMO_ORDER_COUNT" -f "$ROOT_DIR/scripts/seed-large.sql"
+  step "3/5 Seeding full demo data: $DEMO_ORDER_COUNT orders." "several minutes for millions of rows; progress prints every $SEED_BATCH_SIZE rows"
+  psql "$DATABASE_URL" \
+    -v orders="$DEMO_ORDER_COUNT" \
+    -v batch_size="$SEED_BATCH_SIZE" \
+    -f "$ROOT_DIR/scripts/seed-large.sql"
   print_summary "Data summary after seeding:"
 else
   step "3/5 Full demo order data already present." "< 10 sec"
