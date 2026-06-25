@@ -1,0 +1,113 @@
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
+# --- Networking (self-contained VPC; the account has no default VPC) ---
+resource "aws_vpc" "main" {
+  cidr_block           = var.vpc_cidr
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+
+  tags = { Name = "${var.name_prefix}-vpc" }
+}
+
+resource "aws_internet_gateway" "main" {
+  vpc_id = aws_vpc.main.id
+  tags   = { Name = "${var.name_prefix}-igw" }
+}
+
+resource "aws_subnet" "public_a" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = cidrsubnet(var.vpc_cidr, 4, 0)
+  availability_zone       = data.aws_availability_zones.available.names[0]
+  map_public_ip_on_launch = true
+  tags                    = { Name = "${var.name_prefix}-public-a" }
+}
+
+resource "aws_subnet" "public_b" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = cidrsubnet(var.vpc_cidr, 4, 1)
+  availability_zone       = data.aws_availability_zones.available.names[1]
+  map_public_ip_on_launch = true
+  tags                    = { Name = "${var.name_prefix}-public-b" }
+}
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.main.id
+  }
+
+  tags = { Name = "${var.name_prefix}-public-rt" }
+}
+
+resource "aws_route_table_association" "public_a" {
+  subnet_id      = aws_subnet.public_a.id
+  route_table_id = aws_route_table.public.id
+}
+
+resource "aws_route_table_association" "public_b" {
+  subnet_id      = aws_subnet.public_b.id
+  route_table_id = aws_route_table.public.id
+}
+
+# --- Database ---
+resource "random_password" "db_password" {
+  length  = 24
+  special = true
+  # Restrict specials to URL-safe characters so DATABASE_URL needs no encoding.
+  override_special = "_-"
+}
+
+resource "aws_db_subnet_group" "pg" {
+  name       = "${var.name_prefix}-subnet-group"
+  subnet_ids = [aws_subnet.public_a.id, aws_subnet.public_b.id]
+  tags       = { Name = "${var.name_prefix}-subnet-group" }
+}
+
+resource "aws_security_group" "pg" {
+  name        = "${var.name_prefix}-sg"
+  description = "Allow Postgres access from the allowed CIDR"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    description = "PostgreSQL"
+    from_port   = 5432
+    to_port     = 5432
+    protocol    = "tcp"
+    cidr_blocks = [var.allowed_cidr]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = { Name = "${var.name_prefix}-sg" }
+}
+
+resource "aws_db_instance" "pg" {
+  identifier                 = "${var.name_prefix}-db"
+  engine                     = "postgres"
+  engine_version             = var.engine_version
+  instance_class             = var.instance_class
+  allocated_storage          = var.allocated_storage
+  storage_type               = "gp3"
+  db_name                    = var.db_name
+  username                   = var.db_username
+  password                   = random_password.db_password.result
+  db_subnet_group_name       = aws_db_subnet_group.pg.name
+  vpc_security_group_ids     = [aws_security_group.pg.id]
+  publicly_accessible        = true
+  backup_retention_period    = 0
+  skip_final_snapshot        = true
+  deletion_protection        = false
+  auto_minor_version_upgrade = true
+  apply_immediately          = true
+
+  tags = { Name = "${var.name_prefix}-db" }
+}
