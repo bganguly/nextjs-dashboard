@@ -37,7 +37,7 @@ variable "db_username" {
 variable "instance_class" {
   description = "RDS instance class"
   type        = string
-  default     = "db.t3.micro"
+  default     = "db.m5.large"
 }
 
 variable "allocated_storage" {
