@@ -72,7 +72,7 @@ print_summary "Current data summary:"
 step_done
 
 if [[ "$ORDER_COUNT" == "0" ]]; then
-  step "3/5 Seeding full demo data: $DEMO_ORDER_COUNT orders." "several minutes for millions of rows; progress prints every $SEED_BATCH_SIZE rows"
+  step "3/5 Seeding full demo data: $DEMO_ORDER_COUNT orders." "~30 sec per 500k-row batch on db.m5.large; full prep usually ~12-20 min"
   psql "$DATABASE_URL" \
     -v orders="$DEMO_ORDER_COUNT" \
     -v batch_size="$SEED_BATCH_SIZE" \
