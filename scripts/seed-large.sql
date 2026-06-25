@@ -39,10 +39,17 @@ SELECT 'customer' || g || '@example.com',
 FROM generate_series(1, :customers) g;
 
 \echo Seeding :orders orders in batches of :batch_size...
+SET seed.orders = :'orders';
+SET seed.batch_size = :'batch_size';
+SET seed.customers = :'customers';
+SET seed.regions = :'regions';
+SET seed.products = :'products';
 DO $$
 DECLARE
-  total_orders integer := :orders;
-  batch_size integer := :batch_size;
+  total_orders integer := current_setting('seed.orders')::integer;
+  batch_size integer := current_setting('seed.batch_size')::integer;
+  customer_count integer := current_setting('seed.customers')::integer;
+  region_count integer := current_setting('seed.regions')::integer;
   start_id integer := 1;
   end_id integer;
   batch_started timestamptz;
@@ -52,8 +59,8 @@ BEGIN
     batch_started := clock_timestamp();
 
     INSERT INTO orders ("customerId", "regionId", status, total, currency, notes, "placedAt", "updatedAt")
-    SELECT 1 + floor(random() * :customers)::int,
-           1 + floor(random() * :regions)::int,
+    SELECT 1 + floor(random() * customer_count)::int,
+           1 + floor(random() * region_count)::int,
            (ARRAY['PENDING','CONFIRMED','PROCESSING','SHIPPED','DELIVERED','CANCELLED','REFUNDED'])[1 + floor(random() * 7)]::"OrderStatus",
            round((random() * 500 + 10)::numeric, 2),
            'USD',
@@ -74,8 +81,9 @@ END $$;
 \echo Seeding order_items in batches of :batch_size...
 DO $$
 DECLARE
-  total_orders integer := :orders;
-  batch_size integer := :batch_size;
+  total_orders integer := current_setting('seed.orders')::integer;
+  batch_size integer := current_setting('seed.batch_size')::integer;
+  product_count integer := current_setting('seed.products')::integer;
   start_id integer := 1;
   end_id integer;
   batch_started timestamptz;
@@ -85,7 +93,7 @@ BEGIN
     batch_started := clock_timestamp();
 
     INSERT INTO order_items ("orderId", "productId", quantity, "unitPrice", discount)
-    SELECT g, 1 + floor(random() * :products)::int,
+    SELECT g, 1 + floor(random() * product_count)::int,
            1 + floor(random() * 3)::int,
            round((random() * 100 + 5)::numeric, 2), 0
     FROM generate_series(start_id, end_id) g;
