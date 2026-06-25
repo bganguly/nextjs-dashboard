@@ -29,13 +29,13 @@ step_done() {
 
 table_count() {
   local table="$1"
-  psql "$DATABASE_URL" -Atqc "SELECT count(*) FROM $table"
+  psql_retry -Atqc "SELECT count(*) FROM $table"
 }
 
 print_summary() {
   local label="$1"
   printf '\n%s\n' "$label"
-  psql "$DATABASE_URL" -P pager=off -x <<'SQL'
+  psql_retry -P pager=off -x <<'SQL'
 SELECT
   (SELECT count(*) FROM orders) AS orders,
   (SELECT count(*) FROM customers) AS customers,
@@ -48,11 +48,31 @@ SELECT
 SQL
 }
 
+psql_retry() {
+  local attempt max_attempts
+  max_attempts="${PSQL_MAX_ATTEMPTS:-5}"
+  attempt=1
+
+  while true; do
+    if psql "$DATABASE_URL" "$@"; then
+      return 0
+    fi
+
+    if (( attempt >= max_attempts )); then
+      return 1
+    fi
+
+    printf 'psql failed; retrying in 10s (%s/%s)...\n' "$attempt" "$max_attempts" >&2
+    sleep 10
+    attempt=$((attempt + 1))
+  done
+}
+
 apply_dashboard_sql_migrations() {
   local migration
   while IFS= read -r migration; do
     printf '    applying %s\n' "${migration#"$ROOT_DIR"/}"
-    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration"
+    psql_retry -v ON_ERROR_STOP=1 -f "$migration"
   done < <(find "$ROOT_DIR/prisma/migrations" -maxdepth 2 -name migration.sql -print | sort)
 }
 
@@ -73,7 +93,7 @@ step_done
 
 if [[ "$ORDER_COUNT" == "0" ]]; then
   step "3/5 Seeding full demo data: $DEMO_ORDER_COUNT orders." "~30 sec per 500k-row batch on db.m5.large; full prep usually ~12-20 min"
-  psql "$DATABASE_URL" \
+  psql_retry \
     -v orders="$DEMO_ORDER_COUNT" \
     -v batch_size="$SEED_BATCH_SIZE" \
     -f "$ROOT_DIR/scripts/seed-large.sql"
@@ -89,7 +109,7 @@ apply_dashboard_sql_migrations
 step_done
 
 step "5/5 Rebuilding dashboard read models from current orders." "minutes on a multi-million-row database"
-psql "$DATABASE_URL" -f "$ROOT_DIR/scripts/rebuild-dashboard-read-models.sql"
+psql_retry -f "$ROOT_DIR/scripts/rebuild-dashboard-read-models.sql"
 print_summary "Final data and read-model summary:"
 step_done
 
