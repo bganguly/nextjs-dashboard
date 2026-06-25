@@ -37,13 +37,13 @@ variable "db_username" {
 variable "instance_class" {
   description = "RDS instance class"
   type        = string
-  default     = "db.m5.large"
+  default     = "db.m5.xlarge"
 }
 
 variable "allocated_storage" {
   description = "RDS allocated storage in GB"
   type        = number
-  default     = 20
+  default     = 100
 }
 
 variable "allowed_cidr" {

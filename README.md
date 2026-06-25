@@ -32,9 +32,9 @@ npm install
 - Rebuilds the dashboard read models for fast list and chart results
 - Prints an ETA, elapsed time, and table-count summary for each major step
 
-Expected demo-data timing on the default `db.m5.large` RDS instance:
+Expected demo-data timing on the default `db.m5.xlarge` RDS instance:
 
-- Order seed: about 30 seconds per 500,000-row batch, about 4 minutes total
+- Order seed: progress prints every 500,000-row batch
 - Order-item seed: similar batch progress after orders finish
 - Full prepare run: usually about 12-20 minutes end to end
 

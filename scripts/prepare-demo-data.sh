@@ -92,7 +92,7 @@ print_summary "Current data summary:"
 step_done
 
 if [[ "$ORDER_COUNT" == "0" ]]; then
-  step "3/5 Seeding full demo data: $DEMO_ORDER_COUNT orders." "~30 sec per 500k-row batch on db.m5.large; full prep usually ~12-20 min"
+  step "3/5 Seeding full demo data: $DEMO_ORDER_COUNT orders." "batched progress every $SEED_BATCH_SIZE rows on db.m5.xlarge"
   psql_retry \
     -v orders="$DEMO_ORDER_COUNT" \
     -v batch_size="$SEED_BATCH_SIZE" \
@@ -108,8 +108,8 @@ step "4/5 Applying dashboard SQL migrations and indexes." "1-10 min, depending o
 apply_dashboard_sql_migrations
 step_done
 
-step "5/5 Rebuilding dashboard read models from current orders." "minutes on a multi-million-row database"
-psql_retry -f "$ROOT_DIR/scripts/rebuild-dashboard-read-models.sql"
+step "5/5 Rebuilding dashboard read models from current orders." "batched by day with per-phase progress"
+"$ROOT_DIR/scripts/rebuild-dashboard-read-models.sh"
 print_summary "Final data and read-model summary:"
 step_done
 
