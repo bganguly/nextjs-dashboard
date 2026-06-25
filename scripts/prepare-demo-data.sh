@@ -64,24 +64,24 @@ step "1/5 Applying Prisma schema." "< 1 min"
 npx prisma db push
 step_done
 
-step "2/5 Applying dashboard SQL migrations and indexes." "1-10 min, depending on table size"
-apply_dashboard_sql_migrations
-step_done
-
-step "3/5 Checking demo order volume." "< 10 sec"
+step "2/5 Checking demo order volume." "< 10 sec"
 ORDER_COUNT="$(table_count orders)"
 echo "Found $ORDER_COUNT order(s)."
 print_summary "Current data summary:"
 step_done
 
 if [[ "$ORDER_COUNT" == "0" ]]; then
-  step "4/5 Seeding full demo data: $DEMO_ORDER_COUNT orders." "several minutes for millions of rows"
+  step "3/5 Seeding full demo data: $DEMO_ORDER_COUNT orders." "several minutes for millions of rows"
   psql "$DATABASE_URL" -v orders="$DEMO_ORDER_COUNT" -f "$ROOT_DIR/scripts/seed-large.sql"
   print_summary "Data summary after seeding:"
 else
-  step "4/5 Full demo order data already present." "< 10 sec"
+  step "3/5 Full demo order data already present." "< 10 sec"
   echo "Keeping existing orders and rebuilding read models from them."
 fi
+step_done
+
+step "4/5 Applying dashboard SQL migrations and indexes." "1-10 min, depending on table size"
+apply_dashboard_sql_migrations
 step_done
 
 step "5/5 Rebuilding dashboard read models from current orders." "minutes on a multi-million-row database"
