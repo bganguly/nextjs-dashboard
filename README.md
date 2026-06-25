@@ -47,17 +47,12 @@ SEED_BATCH_SIZE=1000000 ./scripts/prepare-demo-data.sh
 ## 3. Start Dashboard On 3004
 
 ```bash
-npm run dev
-```
-
-`npm run dev` starts the combined dashboard backend and UI at
-http://localhost:3004.
-
-This equivalent helper also loads the connection details first:
-
-```bash
 ./scripts/start-dashboard.sh
 ```
+
+`start-dashboard.sh` loads the database connection details (`DATABASE_URL`)
+first, then starts the combined dashboard backend and UI at
+http://localhost:3004.
 
 ## 4. Start Quick Order On 3005
 
