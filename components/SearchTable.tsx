@@ -386,7 +386,13 @@ export default function SearchTable({
         data-testid="search-input"
         type="search"
         value={query}
-        onChange={(e) => setQuery(e.target.value)}
+        onChange={(e) => {
+          setQuery(e.target.value);
+          if (e.target.value === "") {
+            setDebouncedQuery("");
+            setPage(1);
+          }
+        }}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             // Commit the search: list + aggregates repaint. Also the clear+Enter

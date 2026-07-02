@@ -47,7 +47,12 @@ done < <(find "$ROOT_DIR/prisma/migrations" -maxdepth 2 -name migration.sql -pri
 echo "      Migrations applied."
 
 # ── 3. Dashboard ──────────────────────────────────────────────────────────────
+# Resolve public IP only when running on EC2 (metadata endpoint is EC2-only).
+# On a local machine the metadata call times out and we fall back to localhost.
+PUBLIC_IP=$(curl -sf --max-time 2 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null \
+  || echo "localhost")
+
 echo ""
-echo "[3/3] Building and starting dashboard on http://localhost:3004 ..."
+echo "[3/3] Building and starting dashboard on http://${PUBLIC_IP}:3004 ..."
 npm run build
 npm start
