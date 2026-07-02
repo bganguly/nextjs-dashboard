@@ -73,18 +73,15 @@ recover_state_if_drifted() {
     echo "    Backup state did not restore the instance cleanly." >&2
   fi
 
-  # No backup to adopt from. Do NOT delete a healthy DB. Stop with a clear path.
+  # No backup to adopt from — import the live instance directly into state.
   if [[ "$status" == "available" || "$status" == "backing-up" || "$status" == "modifying" ]]; then
-    cat >&2 <<MSG
-
-A healthy RDS instance ($DB_INSTANCE_ID, status: $status) exists but is not in
-Terraform state, and there is no backup state to adopt it from. Refusing to
-delete a healthy database. Import it once, then re-run this script:
-
-  cd "$INFRA_DIR"
-  terraform import aws_db_instance.pg $DB_INSTANCE_ID
-
-MSG
+    echo "    No backup state found. Importing $DB_INSTANCE_ID into Terraform state..."
+    terraform import aws_db_instance.pg "$DB_INSTANCE_ID"
+    if state_has aws_db_instance.pg; then
+      echo "    Imported existing RDS instance — no recreation needed."
+      return
+    fi
+    echo "    Import failed. Cannot safely proceed without risking data loss." >&2
     exit 1
   fi
 }
