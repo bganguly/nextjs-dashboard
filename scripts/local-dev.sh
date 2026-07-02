@@ -4,8 +4,19 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-DB="${LOCAL_DB:-dashboard_local}"
-DATABASE_URL="postgresql://localhost:5432/${DB}"
+# Prefer the Java backend's shared local DB if it already exists.
+# Override with LOCAL_DB to force a specific database.
+if [[ -z "${LOCAL_DB:-}" ]]; then
+  if psql -lqt 2>/dev/null | cut -d'|' -f1 | tr -d ' ' | grep -qx "dashboard_perf"; then
+    DB="dashboard_perf"
+  else
+    DB="dashboard_local"
+  fi
+else
+  DB="$LOCAL_DB"
+fi
+
+DATABASE_URL="postgresql://$(whoami)@localhost:5432/${DB}"
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 fail() { printf '\nERROR: %s\n\n' "$*" >&2; exit 1; }
@@ -37,13 +48,20 @@ ok "postgres" "ready"
 # ── database setup ────────────────────────────────────────────────────────────
 DB_EXISTS=$(psql -lqt 2>/dev/null | cut -d'|' -f1 | tr -d ' ' | grep -x "$DB" || true)
 
+apply_migrations() {
+  printf 'Applying Prisma schema...\n'
+  DATABASE_URL="$DATABASE_URL" npx prisma db push
+
+  printf 'Applying SQL migration files...\n'
+  while IFS= read -r migration; do
+    printf '  %s\n' "${migration#"$ROOT_DIR"/}"
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration"
+  done < <(find "$ROOT_DIR/prisma/migrations" -maxdepth 2 -name migration.sql -print | sort)
+}
+
 if [[ -z "$DB_EXISTS" ]]; then
   printf '\n=== first-time local database setup ===\n'
-  printf '  Will:\n'
-  printf '    1. createdb %s\n' "$DB"
-  printf '    2. apply Prisma schema\n'
-  printf '    3. apply SQL migration files\n'
-  printf '    4. seed demo data (~4 M orders, takes 15-20 min)\n'
+  printf '  Will create %s, apply schema + migrations, optionally seed 4 M orders.\n' "$DB"
   printf '\nProceed? [Y/n] '
   read -r yn
   [[ -z "$yn" || "$yn" =~ ^[Yy]$ ]] || { printf 'Aborted.\n'; exit 0; }
@@ -51,19 +69,12 @@ if [[ -z "$DB_EXISTS" ]]; then
   printf '\n[1/3] creating database %s...\n' "$DB"
   createdb "$DB"
 
-  printf '[2/3] applying Prisma schema...\n'
-  DATABASE_URL="$DATABASE_URL" npx prisma db push
+  printf '[2/3] applying schema + migrations...\n'
+  apply_migrations
 
-  printf '[3/3] applying SQL migration files...\n'
-  while IFS= read -r migration; do
-    printf '      %s\n' "${migration#"$ROOT_DIR"/}"
-    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration"
-  done < <(find "$ROOT_DIR/prisma/migrations" -maxdepth 2 -name migration.sql -print | sort)
-
-  printf '\nSchema ready. Seed demo data now? (skip to start with empty DB) [Y/n] '
+  printf '\n[3/3] Seed demo data now? (skip to start with empty DB) [Y/n] '
   read -r do_seed
   if [[ -z "$do_seed" || "$do_seed" =~ ^[Yy]$ ]]; then
-    printf 'Seeding...\n'
     psql "$DATABASE_URL" \
       -v orders="${DEMO_ORDER_COUNT:-4000000}" \
       -v batch_size="${SEED_BATCH_SIZE:-500000}" \
@@ -72,19 +83,11 @@ if [[ -z "$DB_EXISTS" ]]; then
     printf 'Seed complete.\n'
   fi
 else
-  ok "database" "$DB (exists — skipping setup)"
-
-  printf '\n[1/2] applying any pending Prisma schema changes...\n'
-  DATABASE_URL="$DATABASE_URL" npx prisma db push
-
-  printf '[2/2] applying any pending SQL migration files...\n'
-  while IFS= read -r migration; do
-    printf '      %s\n' "${migration#"$ROOT_DIR"/}"
-    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration"
-  done < <(find "$ROOT_DIR/prisma/migrations" -maxdepth 2 -name migration.sql -print | sort)
+  ok "database" "$DB (exists — applying any pending migrations)"
+  apply_migrations
 fi
 
 # ── start ─────────────────────────────────────────────────────────────────────
-printf '\n=== starting dashboard :3004 (local Postgres: %s) ===\n' "$DB"
+printf '\n=== starting dashboard :3004 (local Postgres: %s) ===\n' "$DATABASE_URL"
 export DATABASE_URL
 npm run dev
