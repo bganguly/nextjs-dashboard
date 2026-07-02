@@ -877,7 +877,8 @@ async function hydrateOrders(ids: number[]): Promise<OrderDTO[]> {
 }
 
 // Pre-warm count cache for first-page customer tokens on module load.
-void (async () => {
+// Guard: DATABASE_URL is absent during `next build` static analysis — skip then.
+void (process.env.DATABASE_URL && (async () => {
   try {
     const rows = await prisma.$queryRaw<{ firstName: string; lastName: string }[]>(Prisma.sql`
       SELECT DISTINCT c."firstName", c."lastName"
@@ -912,7 +913,7 @@ void (async () => {
       ).catch(() => {});
     }
   } catch {}
-})();
+})());
 
 export async function createOrder(input: CreateOrderInput): Promise<CreateOrderResult> {
   if (!input.customerId || !input.regionId || !Array.isArray(input.items) || input.items.length === 0) {

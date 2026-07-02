@@ -34,14 +34,30 @@ Browser ──HTTP──► Next.js API routes ──Prisma──► AWS RDS PG 
 
 ---
 
+## Local Dev
+
+```bash
+./scripts/deploy.sh
+```
+
+**This is the only supported way to start the app.** Do not run `npm run build` or `npm start`
+directly — `DATABASE_URL` must be resolved first or Prisma will error on every request.
+
+`deploy.sh` does everything in one shot:
+1. Provisions AWS RDS if not already up (5-10 min for a new instance, < 2 min if existing)
+2. Applies Prisma schema (`prisma db push`)
+3. Applies all SQL migration files
+4. Builds and starts the dashboard on http://localhost:3004
+
+Prerequisites: `aws` CLI configured, `psql`, `node` 18+, `npx`.
+
 ## Deploy
 
 ```bash
 ./scripts/deploy.sh
 ```
 
-Single entry point. Provisions AWS RDS if not up (5-10 min for a new instance), applies Prisma schema
-and all SQL migration files, then starts the dashboard on http://localhost:3004.
+Same script — deploy and local dev are identical. No separate deploy step.
 
 ---
 
