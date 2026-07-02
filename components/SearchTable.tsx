@@ -406,7 +406,10 @@ export default function SearchTable({
         aria-label="Search records"
       />
 
-      <div className="overflow-x-auto">
+      <div
+        className="overflow-x-auto"
+        style={{ minHeight: (pageSize + 1) * 41 }}
+      >
         {error ? (
           <div className="py-10 text-center text-sm text-red-500">
             Search failed: {error}

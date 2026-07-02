@@ -545,42 +545,66 @@ export default function Chart({
             />
             <Legend
               wrapperStyle={{ fontSize: 12 }}
-              // Render straight from `seriesKeys` so the legend reads left-to-
-              // right in the exact same order as the totals row (both ranked),
-              // instead of whatever order recharts would pick internally.
+              // Render straight from `displayTotals` so the legend doubles as
+              // the totals row (single line), matching the GCP frontend —
+              // ranked top categories, then "Others" pinned last.
               content={() => (
                 <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 pt-2 text-xs">
-                  <ul className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
-                    {seriesKeys.map((key) => (
-                      <li
-                        key={key}
-                        className="inline-flex items-center gap-1.5"
+                  {displayTotals
+                    .filter((ct) => ct.category !== OTHER_KEY)
+                    .map((ct) => (
+                      <span
+                        key={ct.category}
+                        data-testid="aggregate-tile"
+                        // The tile's category is its identity; wt1's SSE
+                        // `categorySlug` must carry this same value for the
+                        // right tile to pulse.
+                        data-category={ct.category}
+                        data-updating={
+                          updatingSlug != null && updatingSlug === ct.category
+                            ? "true"
+                            : undefined
+                        }
+                        className="inline-flex items-center gap-1.5 whitespace-nowrap"
                         style={{ color: axisColor }}
                       >
                         <span
                           aria-hidden
                           className="h-2.5 w-2.5 shrink-0 rounded-sm"
-                          style={{ backgroundColor: colorFor(key) }}
+                          style={{ backgroundColor: colorFor(ct.category) }}
                         />
-                        {key}
-                      </li>
+                        {ct.category}
+                        <span className="font-medium tabular-nums text-gray-900 dark:text-gray-100">
+                          {ct.orders.toLocaleString()}
+                        </span>
+                      </span>
                     ))}
-                  </ul>
-                  {withOther && (
-                    <label
-                      className="inline-flex cursor-pointer items-center gap-1.5"
-                      style={{ color: axisColor }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={showOthers}
-                        onChange={(e) => setShowOthers(e.target.checked)}
-                        className="h-3.5 w-3.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                        data-testid="chart-show-others"
-                      />
-                      Others
-                    </label>
-                  )}
+                  {withOther &&
+                    (() => {
+                      const othersTotal = displayTotals.find(
+                        (ct) => ct.category === OTHER_KEY,
+                      );
+                      return (
+                        <label
+                          className="inline-flex cursor-pointer items-center gap-1.5"
+                          style={{ color: axisColor }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={showOthers}
+                            onChange={(e) => setShowOthers(e.target.checked)}
+                            className="h-3.5 w-3.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                            data-testid="chart-show-others"
+                          />
+                          Others
+                          {othersTotal && (
+                            <span className="font-medium tabular-nums text-gray-900 dark:text-gray-100">
+                              {othersTotal.orders.toLocaleString()}
+                            </span>
+                          )}
+                        </label>
+                      );
+                    })()}
                 </div>
               )}
             />
@@ -632,47 +656,6 @@ export default function Chart({
             />
           </BarChart>
         </ResponsiveContainer>
-
-        {/* Category totals for the current range as a single wrapping row,
-            sorted by revenue desc, mirroring the chart's series + "Others". */}
-        <div className="mt-4">
-          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500">
-            Category totals
-          </p>
-          <div
-            data-testid="category-totals"
-            className="flex flex-nowrap items-center gap-x-4 overflow-x-auto"
-          >
-            {displayTotals.map((ct) => (
-              <span
-                key={ct.category}
-                data-testid="aggregate-tile"
-                // The tile's category is its identity; wt1's SSE `categorySlug`
-                // must carry this same value for the right tile to pulse.
-                data-category={ct.category}
-                data-updating={
-                  updatingSlug != null && updatingSlug === ct.category
-                    ? "true"
-                    : undefined
-                }
-                className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs"
-                title={ct.orders.toLocaleString()}
-              >
-                <span
-                  aria-hidden
-                  className="h-2.5 w-2.5 shrink-0 rounded-sm"
-                  style={{ backgroundColor: colorFor(ct.category) }}
-                />
-                <span className="text-gray-600 dark:text-gray-300">
-                  {ct.category}
-                </span>
-                <span className="font-medium tabular-nums text-gray-900 dark:text-gray-100">
-                  {ct.orders.toLocaleString()}
-                </span>
-              </span>
-            ))}
-          </div>
-        </div>
         </>
       )}
     </section>
