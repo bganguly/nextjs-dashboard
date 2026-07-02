@@ -111,7 +111,7 @@ resource "aws_key_pair" "app" {
 
 resource "aws_security_group" "app" {
   name        = "${var.name_prefix}-app-sg"
-  description = "Dashboard app server — SSH + port 3004"
+  description = "Dashboard app server - SSH + port 3004"
   vpc_id      = aws_vpc.main.id
 
   ingress {
