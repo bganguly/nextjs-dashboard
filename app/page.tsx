@@ -49,6 +49,8 @@ function eventDay(raw: unknown): string | undefined {
   return new Date(tzMs).toISOString().slice(0, 10);
 }
 
+const showQuickOrder = process.env.NEXT_PUBLIC_ENABLE_QUICKORDER === "1";
+
 export default function Dashboard() {
   const [refreshSignal, setRefreshSignal] = useState(0);
   const [filters, setFilters] = useState<OrderFilters>(EMPTY_FILTERS);
@@ -157,8 +159,8 @@ export default function Dashboard() {
           />
 
           <div className="min-w-0 flex-1">
-            <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-              <div className="space-y-6 lg:col-span-2">
+            <div className={`grid grid-cols-1 gap-6${showQuickOrder ? " lg:grid-cols-3" : ""}`}>
+              <div className={`space-y-6${showQuickOrder ? " lg:col-span-2" : ""}`}>
                 <Chart
                   refreshSignal={refreshSignal}
                   filters={filters}
@@ -177,9 +179,11 @@ export default function Dashboard() {
                   highlightKey={lastOrder?.seq}
                 />
               </div>
-              <div className="lg:col-span-1">
-                <LiveFeed onEvent={handleEvent} />
-              </div>
+              {showQuickOrder && (
+                <div className="lg:col-span-1">
+                  <LiveFeed onEvent={handleEvent} />
+                </div>
+              )}
             </div>
           </div>
         </div>

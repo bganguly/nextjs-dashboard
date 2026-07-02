@@ -54,6 +54,11 @@ Override the local DB name:
 LOCAL_DB=my_db ./scripts/local-dev.sh
 ```
 
+Enable the Live Feed panel + SSE stream (requires [websockets-quickorder](https://github.com/bganguly/websockets-quickorder) on :3005):
+```bash
+./scripts/local-dev.sh --quickorder
+```
+
 ## Deploy (AWS RDS)
 
 ```bash
@@ -62,6 +67,8 @@ LOCAL_DB=my_db ./scripts/local-dev.sh
 
 For cloud — provisions AWS RDS if not up, applies schema + SQL migrations, builds and starts the
 production server (`npm run build && npm start`) on http://localhost:3004 pointed at remote RDS.
+
+Add `--quickorder` to enable the Live Feed panel and SSE stream.
 
 Prerequisites: `aws` CLI configured, `psql`, `node` 18+, `npx`.
 
