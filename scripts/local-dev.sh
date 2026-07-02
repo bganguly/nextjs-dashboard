@@ -39,7 +39,10 @@ apply_migrations() {
   printf 'Applying SQL migration files...\n'
   while IFS= read -r migration; do
     printf '  %s\n' "${migration#"$ROOT_DIR"/}"
-    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration"
+    if ! psql_out=$(psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration" 2>&1); then
+      echo "$psql_out"
+      exit 1
+    fi
   done < <(find "$ROOT_DIR/prisma/migrations" -maxdepth 2 -name migration.sql -print | sort)
 }
 
