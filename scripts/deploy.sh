@@ -91,7 +91,11 @@ for candidate in "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_rsa"; do
   [[ -f "$candidate" ]] && { SSH_KEY="$candidate"; break; }
 done
 if [[ -z "$SSH_KEY" ]]; then
-  prompt_local_fallback "No SSH private key found at ~/.ssh/id_ed25519 or ~/.ssh/id_rsa."
+  # Fall back to the private key matching whichever .pub was used
+  SSH_KEY=$(ls "$HOME/.ssh/"*.pub 2>/dev/null | head -1 | sed 's/\.pub$//' || true)
+fi
+if [[ -z "$SSH_KEY" || ! -f "$SSH_KEY" ]]; then
+  prompt_local_fallback "No SSH private key found in ~/.ssh/."
   run_local
   exit 0
 fi

@@ -164,12 +164,15 @@ step "5/7 Applying AWS infra: VPC, subnets, route table, security groups, RDS Po
 echo "    Terraform is idempotent: it creates missing pieces and leaves healthy existing pieces alone."
 
 SSH_PUB_KEY=""
+# Prefer standard key names, then fall back to any .pub file in ~/.ssh.
 for candidate in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_rsa.pub"; do
   [[ -f "$candidate" ]] && { SSH_PUB_KEY="$candidate"; break; }
 done
 if [[ -z "$SSH_PUB_KEY" ]]; then
-  echo "No SSH public key found at ~/.ssh/id_ed25519.pub or ~/.ssh/id_rsa.pub." >&2
-  echo "Generate one with: ssh-keygen -t ed25519" >&2
+  SSH_PUB_KEY=$(ls "$HOME/.ssh/"*.pub 2>/dev/null | head -1 || true)
+fi
+if [[ -z "$SSH_PUB_KEY" ]]; then
+  echo "No SSH public key found in ~/.ssh/. Generate one with: ssh-keygen -t ed25519" >&2
   exit 1
 fi
 echo "    Using SSH public key: $SSH_PUB_KEY"
