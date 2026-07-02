@@ -25,6 +25,12 @@ CREATE INDEX IF NOT EXISTS "daily_filter_category_summary_date_status_region_idx
 CREATE INDEX IF NOT EXISTS "daily_filter_category_summary_region_code_date_status_idx"
   ON "daily_filter_category_summary" ("regionCode", "date", "status");
 
+-- Ensure column exists with a default for tables pre-created by other migrations.
+ALTER TABLE "daily_filter_category_summary"
+  ADD COLUMN IF NOT EXISTS "updatedAt" timestamp(3) DEFAULT CURRENT_TIMESTAMP;
+UPDATE "daily_filter_category_summary"
+  SET "updatedAt" = CURRENT_TIMESTAMP WHERE "updatedAt" IS NULL;
+
 INSERT INTO "daily_filter_category_summary" (
   "date",
   "regionId",
@@ -34,7 +40,9 @@ INSERT INTO "daily_filter_category_summary" (
   "categoryName",
   "totalOrders",
   "totalRevenue",
-  "totalItems"
+  "totalItems",
+  "createdAt",
+  "updatedAt"
 )
 SELECT
   "date",
@@ -45,7 +53,9 @@ SELECT
   "categoryName",
   SUM("totalOrders")::integer,
   SUM("totalRevenue"),
-  SUM("totalItems")::integer
+  SUM("totalItems")::integer,
+  CURRENT_TIMESTAMP,
+  CURRENT_TIMESTAMP
 FROM "daily_customer_category_summary"
 GROUP BY
   "date",
