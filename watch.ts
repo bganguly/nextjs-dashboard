@@ -8,7 +8,7 @@ import { notifyBlocked } from "./tests/notify";
  * Watcher: re-runs the Playwright suite whenever the backend or frontend
  * worktrees change. When any single test fails 3 times in a row it both
  * (a) records the block in BLOCKED.md ([TESTING] prefix) and commits/pushes it,
- * and (b) alerts via notifyBlocked (Telegram and/or email).
+ * and (b) alerts via notifyBlocked (email).
  *
  * Run with:  npx tsx watch.ts
  *
@@ -207,12 +207,12 @@ async function processResults(exitCode: number, stderrTail: string): Promise<voi
       // 1) Persist the block to BLOCKED.md (and commit/push).
       writeBlocked(title, streak, details);
 
-      // 2) Alert over every configured channel (Telegram and/or email).
+      // 2) Alert via email, if configured.
       try {
         const sent = await notifyBlocked(title, streak, details);
         console.log(
           sent
-            ? `[watch] alerted (telegram/email): ${title}`
+            ? `[watch] alerted (email): ${title}`
             : `[watch] alert skipped (no channel configured): ${title}`,
         );
       } catch (err) {

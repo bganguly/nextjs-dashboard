@@ -208,9 +208,9 @@ Key properties:
 - **The SSE live-feed (`publishOrderEvent` → `/api/stream`) is untouched** — it still fires
   immediately after the order commits, independent of the outbox/worker.
 - Started automatically by `scripts/local-dev.sh` and `scripts/deploy.sh` (via
-  `scripts/start-aggregates-worker.sh`, a pidfile + `nohup` process — same pattern as
-  `scripts/start-bot.sh`). Manage it directly with `scripts/start-aggregates-worker.sh` /
-  `stop-aggregates-worker.sh` / `restart-aggregates-worker.sh`.
+  `scripts/start-aggregates-worker.sh`, a detached process managed with a pidfile + `nohup`).
+  Manage it directly with `scripts/start-aggregates-worker.sh` / `stop-aggregates-worker.sh` /
+  `restart-aggregates-worker.sh`.
 
 ### How a future agent should test this
 

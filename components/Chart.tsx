@@ -283,6 +283,21 @@ export default function Chart({
     if (!lastSseOrder) return;
     if (lastSseOrder === lastPatched.current) return;
     lastPatched.current = lastSseOrder;
+    // A blind +1 is only safe when nothing could exclude the new order — with
+    // a search/filter active, we can't tell from categorySlug/placedAt alone
+    // whether it actually matches, so skip the optimistic bump and let the
+    // refetch triggered by the same SSE event (see refreshSignal effect above)
+    // supply the correct, properly-filtered count instead.
+    const filtered = Boolean(
+      searchQuery ||
+        filters?.status?.length ||
+        filters?.regionCodes?.length ||
+        filters?.from ||
+        filters?.to ||
+        filters?.totalMin ||
+        filters?.totalMax,
+    );
+    if (filtered) return;
     const { categorySlug, placedAt } = lastSseOrder;
     if (!categorySlug || !placedAt) return;
     const day = placedAt.slice(0, 10);
@@ -302,6 +317,11 @@ export default function Chart({
       };
       return next;
     });
+    // searchQuery/filters intentionally omitted: read via closure at the
+    // render where lastSseOrder changed, which is what we want — re-running
+    // this effect on a pure filter change (no new order) would be a no-op
+    // anyway since the lastPatched guard above already blocks reprocessing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastSseOrder]);
 
   // Bar flash (Task 17): when an SSE order lands, brighten the affected

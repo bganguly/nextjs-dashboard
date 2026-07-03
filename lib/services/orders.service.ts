@@ -93,12 +93,13 @@ export function normalizeStatusList(csv: string | null | undefined): OrderStatus
     .filter((s): s is OrderStatus => (ORDER_STATUSES as readonly string[]).includes(s));
 }
 
+/** UTC "today" — must match how placedAt (a tz-naive column populated with
+ *  UTC wall-clock numerals) buckets into date columns like daily_summary.date
+ *  (`placedAt::date`, a plain truncation with no timezone reinterpretation).
+ *  Using the server's local machine time here would silently exclude/include
+ *  the wrong day's rows whenever local time and UTC disagree on the date. */
 export function todayDateString(): string {
-  const now = new Date();
-  const yyyy = now.getFullYear();
-  const mm = String(now.getMonth() + 1).padStart(2, "0");
-  const dd = String(now.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
+  return new Date().toISOString().slice(0, 10);
 }
 
 function parseDateBoundary(value: string | null | undefined, edge: "start" | "end"): Date | null {
@@ -115,6 +116,18 @@ function parseDateBoundary(value: string | null | undefined, edge: "start" | "en
     d.setUTCHours(23, 59, 59, 999);
   }
   return d;
+}
+
+/** Format a Date's UTC wall-clock components as a naive "YYYY-MM-DD HH:mm:ss.SSS"
+ *  string with no timezone marker. `orders.placedAt` is a `timestamp without
+ *  time zone` column populated with UTC wall-clock numerals (no conversion
+ *  happens on read/write since the column has no zone attached) — but binding
+ *  a raw JS `Date` object as a query parameter makes Prisma serialize it using
+ *  the server process's LOCAL machine timezone, silently shifting every
+ *  date-range filter by the local UTC offset. Binding this literal string
+ *  instead sidesteps that serialization entirely. */
+function toNaiveUtcTimestamp(d: Date): string {
+  return d.toISOString().replace("T", " ").replace("Z", "");
 }
 
 function parseNumber(value: number | null | undefined, name: string): number | null {
@@ -163,8 +176,8 @@ export function buildFilterConditions(f: ResolvedFilters): Prisma.Sql[] {
   const c: Prisma.Sql[] = [];
   if (f.statuses.length) c.push(Prisma.sql`o.status = ANY(${f.statuses}::text[]::"OrderStatus"[])`);
   if (f.regionIds !== null) c.push(Prisma.sql`o."regionId" = ANY(${f.regionIds})`);
-  if (f.from) c.push(Prisma.sql`o."placedAt" >= ${f.from}`);
-  if (f.to) c.push(Prisma.sql`o."placedAt" <= ${f.to}`);
+  if (f.from) c.push(Prisma.sql`o."placedAt" >= ${toNaiveUtcTimestamp(f.from)}::timestamp`);
+  if (f.to) c.push(Prisma.sql`o."placedAt" <= ${toNaiveUtcTimestamp(f.to)}::timestamp`);
   if (f.minTotal !== null) c.push(Prisma.sql`o.total >= ${f.minTotal}`);
   if (f.maxTotal !== null) c.push(Prisma.sql`o.total <= ${f.maxTotal}`);
   return c;

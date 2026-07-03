@@ -7,7 +7,7 @@ import { notify } from "./tests/notify";
  * Polls open PRs targeting `develop`, runs the Playwright suite against each
  * (BASE_URL must point at a running deployment/preview of that PR's code), and
  * posts a `playwright` commit status on the PR head SHA so branch protection
- * can gate merges on it. New failures are also pushed to Telegram via notify().
+ * can gate merges on it. New failures are also emailed via notify().
  *
  * Run with:  npx tsx pr-watch.ts
  *

@@ -46,12 +46,6 @@ next-env.d.ts
 /test-results/
 /playwright-report/
 
-# bot runtime artifacts
-/bot.log
-/scripts/bot.pid
-/scripts/.bot-state.json
-/scripts/.bot-inbox.log
-
 # aggregates-worker runtime artifacts
 /aggregates-worker.log
 /scripts/aggregates-worker.pid
@@ -61,7 +55,6 @@ next-env.d.ts
 /infra/*.tfstate
 /infra/*.tfstate.*
 /.env.rds
-/scripts/.notify-mode.json
 
 # local agent/session artifacts
 /.claude/
