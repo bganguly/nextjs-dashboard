@@ -216,9 +216,30 @@ export default function Chart({
   // window into the shared filters so the list narrows too) — it does NOT
   // imply controlled mode. Only supplying controlledData does.
   const isControlled = controlledData !== undefined;
+  // A brush drag calls fetchAggregates directly, then (via onRangeChange)
+  // updates the parent's filters — which changes filters?.from/to and
+  // re-fires the effect below with the exact same resulting request. Track
+  // the last request's querystring so that echo is a no-op instead of a
+  // second full round trip to the backend.
+  const lastRequestKeyRef = useRef<string | null>(null);
 
   const fetchAggregates = useCallback(
     async (from: string, to: string) => {
+      // A date filter, if set, overrides the brush/default range; the other
+      // filters (status, region, total) narrow the same set as the table.
+      const params = new URLSearchParams({
+        from: filters?.from || from,
+        to: filters?.to || to,
+      });
+      params.set("topCategories", String(topN));
+      // Sets status/regionCode/minTotal/maxTotal (and from/to if filtered).
+      appendFilterParams(params, filters);
+      // Narrow to the active text search, matching the orders table.
+      if (searchQuery) params.set("q", searchQuery);
+      const requestKey = params.toString();
+      if (requestKey === lastRequestKeyRef.current) return;
+      lastRequestKeyRef.current = requestKey;
+
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
@@ -230,17 +251,6 @@ export default function Chart({
       // (see the lastSseOrder patch effect); user-driven fetches replace the
       // bars atomically when the response lands.
       try {
-        // A date filter, if set, overrides the brush/default range; the other
-        // filters (status, region, total) narrow the same set as the table.
-        const params = new URLSearchParams({
-          from: filters?.from || from,
-          to: filters?.to || to,
-        });
-        params.set("topCategories", String(topN));
-        // Sets status/regionCode/minTotal/maxTotal (and from/to if filtered).
-        appendFilterParams(params, filters);
-        // Narrow to the active text search, matching the orders table.
-        if (searchQuery) params.set("q", searchQuery);
         const res = await fetch(`${endpoint}?${params}`, {
           signal: controller.signal,
         });
@@ -256,6 +266,7 @@ export default function Chart({
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
         if (abortRef.current !== controller) return;
+        lastRequestKeyRef.current = null; // allow a retry of the same params after a real failure
         setError((err as Error).message);
       } finally {
         if (abortRef.current === controller) setLoading(false);
