@@ -140,6 +140,28 @@ for i in $(seq 1 36); do
   sleep 5
 done
 
+# ── Ensure the root filesystem actually uses the full disk ──────────────────
+# A Terraform-only root_block_device resize (e.g. bumping ec2_root_volume_size)
+# enlarges the EBS volume but NOT the partition/filesystem sitting on it — EC2
+# doesn't grow those automatically. Happened once: the volume correctly went
+# 2GB -> 20GB, but the XFS filesystem stayed at 2GB/100% full, so every rsync
+# after kept failing with "No space left on device" despite the "bigger disk"
+# fix already being live. growpart + xfs_growfs/resize2fs are safe no-ops once
+# the filesystem already matches the disk, so this always runs, not just on
+# first boot after a resize.
+echo "  Ensuring root filesystem uses the full disk..."
+ssh $SSH_OPTS "ec2-user@${EC2_IP}" '
+  ROOT_SRC="$(findmnt -n -o SOURCE /)"
+  DISK="/dev/$(lsblk -no PKNAME "$ROOT_SRC")"
+  PART_NUM="$(echo "$ROOT_SRC" | grep -oE "[0-9]+$")"
+  sudo growpart "$DISK" "$PART_NUM" 2>&1 | grep -v NOCHANGE || true
+  if [ "$(findmnt -n -o FSTYPE /)" = xfs ]; then
+    sudo xfs_growfs / >/dev/null
+  else
+    sudo resize2fs "$ROOT_SRC" >/dev/null
+  fi
+'
+
 # ── Automatic schema drift check — no flag, always runs ─────────────────────
 # Catches the class of bug where migrate deploy's baseline self-heal (the
 # P3005 path in apply_migrations) wrongly assumes a migration's raw SQL had
