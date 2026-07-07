@@ -266,6 +266,12 @@ export default function ApiExplorer() {
           <div>
             <a
               href="https://bganguly.github.io"
+              onClick={(e) => {
+                if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
+                  e.preventDefault();
+                  window.history.back();
+                }
+              }}
               className="text-sm text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300 mb-1 inline-flex items-center gap-1"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M5 12l7-7M5 12l7 7"/></svg>
