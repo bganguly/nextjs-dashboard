@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useState } from "react";
 import ThemeToggle from "@/components/ThemeToggle";
 
@@ -265,12 +264,13 @@ export default function ApiExplorer() {
       <main className="w-full px-5 py-8">
         <header className="mb-6 flex items-start justify-between gap-4">
           <div>
-            <Link
-              href="/"
-              className="text-sm text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300 mb-1 inline-block"
+            <a
+              href="https://bganguly.github.io"
+              className="text-sm text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300 mb-1 inline-flex items-center gap-1"
             >
-              ← Dashboard
-            </Link>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M5 12l7-7M5 12l7 7"/></svg>
+              Portfolio
+            </a>
             <h1 className="text-2xl font-semibold tracking-tight">API Explorer</h1>
             <p className="text-sm text-gray-500">Browse and exercise the backend API endpoints.</p>
           </div>
