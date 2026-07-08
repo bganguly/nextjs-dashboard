@@ -571,20 +571,40 @@ async function hydrateOrders(ids: number[]): Promise<OrderDTO[]> {
 }
 
 // Pre-warm count cache for first-page customer tokens on module load.
+// LIMIT 40 covers both the first and second visible pages (20 rows each).
+// Key and COUNT query are scoped to the UI's default date range (2020-01-01
+// to today) so warmup entries match the keys live queries produce.
 // Guard: DATABASE_URL is absent during `next build` static analysis — skip then.
+const COUNT_CACHE_DEFAULT_FROM = "2020-01-01";
 void (process.env.DATABASE_URL && (async () => {
   try {
     const rows = await prisma.$queryRaw<{ firstName: string; lastName: string }[]>(Prisma.sql`
       SELECT DISTINCT c."firstName", c."lastName"
-      FROM (SELECT "customerId" FROM orders ORDER BY "placedAt" DESC LIMIT 20) recent
+      FROM (SELECT "customerId" FROM orders ORDER BY "placedAt" DESC LIMIT 40) recent
       JOIN customers c ON c.id = recent."customerId"`);
     const tokens = new Set<string>();
     for (const r of rows) {
       if (r.firstName?.trim()) tokens.add(r.firstName.trim().toLowerCase());
       if (r.lastName?.trim()) tokens.add(r.lastName.trim().toLowerCase());
     }
+
+    // Dates must match parseDateBoundary so buildCountCacheKey produces the
+    // same key that live queries write (from=ISO&to=ISO, not from=&to=).
+    const defaultFrom = new Date(COUNT_CACHE_DEFAULT_FROM);
+    const defaultTo = new Date(todayDateString());
+    defaultTo.setUTCHours(23, 59, 59, 999);
+    const defaultFilters: ResolvedFilters = {
+      statuses: [],
+      regionIds: null,
+      from: defaultFrom,
+      to: defaultTo,
+      minTotal: null,
+      maxTotal: null,
+      hasAny: true,
+    };
+
     for (const token of tokens) {
-      const key = `q=${token}&status=&regionIds=&from=&to=&minTotal=&maxTotal=`;
+      const key = buildCountCacheKey(token, defaultFilters);
       const hit = await prisma.$queryRaw<{ total: bigint }[]>(Prisma.sql`
         SELECT total FROM count_cache
         WHERE cache_key = ${key} AND cached_at > NOW() - INTERVAL '30 days'
@@ -593,7 +613,10 @@ void (process.env.DATABASE_URL && (async () => {
 
       const pattern = `%${token}%`;
       const result = await prisma.$queryRaw<{ count: bigint }[]>(Prisma.sql`
-        SELECT count(*)::bigint AS count FROM orders o WHERE o.search_text ILIKE ${pattern}`
+        SELECT count(*)::bigint AS count FROM orders o
+        WHERE o."placedAt" >= ${toNaiveUtcTimestamp(defaultFrom)}::timestamp
+          AND o."placedAt" <= ${toNaiveUtcTimestamp(defaultTo)}::timestamp
+          AND o.search_text ILIKE ${pattern}`
       ).catch(() => null);
       if (!result) continue;
       const total = Number(result[0]?.count ?? 0);
