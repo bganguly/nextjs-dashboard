@@ -4,7 +4,7 @@ import { notify } from "./tests/notify";
 /**
  * Agent-3 PR watcher.
  *
- * Polls open PRs targeting `develop`, runs the Playwright suite against each
+ * Polls open PRs targeting `main`, runs the Playwright suite against each
  * (BASE_URL must point at a running deployment/preview of that PR's code), and
  * posts a `playwright` commit status on the PR head SHA so branch protection
  * can gate merges on it. New failures are also emailed via notify().
@@ -13,12 +13,12 @@ import { notify } from "./tests/notify";
  *
  * Env:
  *   BASE_URL       app under test for the current PR (default http://localhost:3003)
- *   PR_BASE        base branch to watch (default develop)
+ *   PR_BASE        base branch to watch (default main)
  *   POLL_MS        poll interval (default 60000)
  *   REPO           owner/repo (default: inferred from gh)
  */
 
-const PR_BASE = process.env.PR_BASE ?? "develop";
+const PR_BASE = process.env.PR_BASE ?? "main";
 const POLL_MS = Number(process.env.POLL_MS ?? "60000");
 const STATUS_CONTEXT = "playwright";
 
