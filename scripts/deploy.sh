@@ -116,7 +116,7 @@ if [[ -z "$SSH_KEY" || ! -f "$SSH_KEY" ]]; then
   exit 0
 fi
 
-SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=5 -i $SSH_KEY"
+SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -i $SSH_KEY"
 
 # Load the key into ssh-agent once so passphrase is only entered once (if at all).
 if ! ssh-add -l 2>/dev/null | grep -qF "$SSH_KEY"; then
