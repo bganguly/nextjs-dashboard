@@ -66,7 +66,7 @@ export function buildSearchTextConditions(q: string | null | undefined): Prisma.
   if (!text) return [];
   return text
     .split(/\s+/)
-    .filter((token) => token.length >= 3)
+    .filter(Boolean)
     .map((token) => Prisma.sql`o.search_text ILIKE ${`%${escapeLike(token)}%`}`);
 }
 
