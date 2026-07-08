@@ -697,7 +697,11 @@ export default function SearchTable({
                   displayTotal.toLocaleString()
                 )}
               </span>{" "}
-              results
+              {showSkeleton ? (
+                <span aria-hidden className={`${skeletonCls} w-10`} />
+              ) : (
+                "results"
+              )}
             </span>
 
             {showSkeleton && displayTotalPages > 1 ? (
