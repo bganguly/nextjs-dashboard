@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 import { AppError, mapDbError } from "@/lib/errors";
+import { aggCacheGet, aggCacheSet } from "@/lib/aggregates-cache";
 import type { AggregateQueryInput, CategoryAggregate, DailyAggregate } from "@/lib/types";
 import {
   buildCountCacheKey,
@@ -75,6 +76,10 @@ export async function getDailyAggregates(input: AggregateQueryInput): Promise<Da
       ? Math.trunc(query.topCategories)
       : DEFAULT_TOP_CATEGORIES;
 
+  const cacheKey = `data:${JSON.stringify(query)}`;
+  const cached = aggCacheGet<DailyAggregate[]>(cacheKey);
+  if (cached) return cached;
+
   try {
     const rows = canUseDailySummary(query)
       ? await fastPath(query)
@@ -83,7 +88,9 @@ export async function getDailyAggregates(input: AggregateQueryInput): Promise<Da
         (await filterSummaryPath(query)) ??
         (await factFilterPath(query)) ??
         (await slowPath(query));
-    return rowsToDailyAggregates(rows, topN);
+    const result = rowsToDailyAggregates(rows, topN);
+    aggCacheSet(cacheKey, result);
+    return result;
   } catch (err) {
     mapDbError(err, "getDailyAggregates");
   }
@@ -106,18 +113,27 @@ export async function getExactAggregateTotal(input: AggregateQueryInput): Promis
     ...input,
     to: input.to || (input.from ? todayDateString() : input.to),
   };
+
+  const inProcKey = `total:${JSON.stringify(query)}`;
+  const cachedTotal = aggCacheGet<number>(inProcKey);
+  if (cachedTotal != null) return cachedTotal;
+
   const filters = await resolveFilters(query);
   try {
     // A brush drag lands on a never-before-cached date range essentially
     // every time, so count_cache can't help there — but a pure date-range
     // query (no q/status/region/total filter) can be answered by summing
     // the zero-lag DailyOrderCount rollup instead of a live COUNT(*).
+    let total: number;
     if (isPureDateRangeQuery(query.q ?? undefined, filters)) {
-      return await sumDailyOrderCount(filters.from, filters.to);
+      total = await sumDailyOrderCount(filters.from, filters.to);
+    } else {
+      const conds = [...buildSearchTextConditions(query.q), ...buildFilterConditions(filters)];
+      const dbCacheKey = buildCountCacheKey(query.q ?? undefined, filters);
+      total = await cachedCount(dbCacheKey, () => exactCount(whereClause(conds)));
     }
-    const conds = [...buildSearchTextConditions(query.q), ...buildFilterConditions(filters)];
-    const cacheKey = buildCountCacheKey(query.q ?? undefined, filters);
-    return await cachedCount(cacheKey, () => exactCount(whereClause(conds)));
+    aggCacheSet(inProcKey, total);
+    return total;
   } catch (err) {
     mapDbError(err, "getExactAggregateTotal");
   }
@@ -711,3 +727,25 @@ export async function updateDailyCustomerTokenCategoryRollup(orderId: number, db
       "updatedAt"    = now()`);
 }
 
+// Pre-warm the in-process aggregates cache for the default dashboard view
+// (full date range, no filters) so the first page load doesn't pay a cold DB
+// cost. Guard: DATABASE_URL is absent during `next build` static analysis.
+void (process.env.DATABASE_URL && (async () => {
+  try {
+    const today = todayDateString();
+    const defaultInput: AggregateQueryInput = {
+      from: "2020-01-01",
+      to: today,
+      q: null,
+      status: null,
+      regionCode: null,
+      minTotal: null,
+      maxTotal: null,
+      topCategories: DEFAULT_TOP_CATEGORIES,
+    };
+    await Promise.all([
+      getDailyAggregates(defaultInput),
+      getExactAggregateTotal(defaultInput),
+    ]);
+  } catch {}
+})());

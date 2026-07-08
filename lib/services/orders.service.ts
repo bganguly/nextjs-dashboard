@@ -15,6 +15,7 @@ import type {
   OrderStatus,
   SortDir,
 } from "@/lib/types";
+import { invalidateAggregatesCache } from "@/lib/aggregates-cache";
 import { publishOrderEvent } from "./stream.service";
 
 const DEFAULT_PAGE_SIZE = 20;
@@ -22,7 +23,7 @@ const MAX_PAGE_SIZE = 100;
 const DEFAULT_SORT: OrderSortField = "placedAt";
 const DEFAULT_DIR: SortDir = "desc";
 const COUNT_CAP = 10_000;
-const COUNT_SENTINEL = COUNT_CAP + 1; // returned when result exceeds cap
+export const COUNT_SENTINEL = COUNT_CAP + 1; // returned when result exceeds cap
 
 const ORDER_STATUSES: readonly OrderStatus[] = [
   "PENDING",
@@ -65,7 +66,7 @@ export function buildSearchTextConditions(q: string | null | undefined): Prisma.
   if (!text) return [];
   return text
     .split(/\s+/)
-    .filter(Boolean)
+    .filter((token) => token.length >= 3)
     .map((token) => Prisma.sql`o.search_text ILIKE ${`%${escapeLike(token)}%`}`);
 }
 
@@ -698,6 +699,9 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
           substring(cache_key from 'q=([^&]*)') = ''
           OR (${searchText} <> '' AND ${searchText} ILIKE '%' || substring(cache_key from 'q=([^&]*)') || '%')`)
       .catch(() => {});
+    // Invalidate the in-process aggregates cache so the next /api/aggregates
+    // request sees the new order rather than serving a pre-new snapshot.
+    invalidateAggregatesCache();
     return {
       id: created.id,
       status: created.status,

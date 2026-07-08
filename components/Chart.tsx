@@ -202,6 +202,9 @@ export default function Chart({
   const [range, setRange] = useState(defaultRange);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Exact order count from the API response. null while a fetch is in flight
+  // (shows a skeleton in the Total tile). Set from json.totalOrders on settle.
+  const [apiTotal, setApiTotal] = useState<number | null>(null);
   // Date whose bar is currently pulsing after a new order (transient).
   const [pulseDate, setPulseDate] = useState<string | null>(null);
   // Category whose chart bar should briefly flash (brightness pop) after an SSE
@@ -246,6 +249,7 @@ export default function Chart({
 
       setLoading(true);
       setError(null);
+      setApiTotal(null); // show skeleton in Total tile while in flight
       // NOTE: do NOT clear rawData here. Clearing on every load caused the chart
       // to flash empty (FOUC) on SSE-driven refreshes. SSE no longer refetches
       // (see the lastSseOrder patch effect); user-driven fetches replace the
@@ -262,6 +266,7 @@ export default function Chart({
         // overwrite the correct state from the request that superseded it.
         if (abortRef.current !== controller) return;
         setRawData(Array.isArray(json.data) ? json.data : []);
+        setApiTotal(json.totalOrders ?? null);
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
         if (abortRef.current !== controller) return;
@@ -404,13 +409,8 @@ export default function Chart({
     [rawData],
   );
 
-  // Client-side sum of per-category counts — this IS the Total tile's number
-  // now (previously overridden by a separate backend exact-distinct-order
-  // count, which could disagree with a visible category tile and confuse
-  // users, e.g. "Others 76,622 > Total 10,001" when the backend total was
-  // capped). Still overcounts any order whose items span more than one
-  // category (each such category gets totalOrders=1 for that order), but
-  // that's now the one consistent number shown everywhere.
+  // Client-side sum of per-category counts — fallback for the Total tile when
+  // apiTotal hasn't settled yet (e.g. controlled mode, or error path).
   const summedCategoryOrders = useMemo(
     () =>
       rawData.reduce((sum, day) => {
@@ -422,14 +422,19 @@ export default function Chart({
       }, 0),
     [rawData],
   );
-  const matchedOrders = summedCategoryOrders;
+  const matchedOrders = apiTotal ?? summedCategoryOrders;
 
-  // Propagate the Total tile's number to the parent so SearchTable's list
-  // footer/last-page button can show the exact same figure instead of its
-  // own (potentially capped) backend total.
+  // Use a ref so the effect below doesn't need onTotalChange as a dep
+  // (avoids recreating the effect when the parent re-renders).
+  const onTotalChangeRef = useRef(onTotalChange);
+  useEffect(() => { onTotalChangeRef.current = onTotalChange; });
+
+  // Propagate the settled API total to the parent so SearchTable's list footer
+  // can show the exact same figure instead of its own (potentially capped) total.
   useEffect(() => {
-    onTotalChange?.(summedCategoryOrders);
-  }, [summedCategoryOrders, onTotalChange]);
+    if (apiTotal == null) return;
+    onTotalChangeRef.current?.(apiTotal);
+  }, [apiTotal]);
 
   // Stack only the top N *real* categories; everything else (including any
   // backend-provided "Other"/"Others" pseudo-category) rolls into a single
@@ -679,13 +684,20 @@ export default function Chart({
                     })()}
                   <span
                     data-testid="aggregate-tile-total"
-                    data-total={matchedOrders}
+                    data-total={apiTotal ?? undefined}
                     className="inline-flex items-center gap-1.5 whitespace-nowrap border-l border-gray-200 pl-4 font-medium dark:border-gray-700"
                     style={{ color: axisColor }}
                   >
                     Total
                     <span className="font-medium tabular-nums text-gray-900 dark:text-gray-100">
-                      {matchedOrders.toLocaleString()}
+                      {apiTotal == null ? (
+                        <span
+                          aria-hidden
+                          className="inline-block h-3 w-10 animate-pulse rounded bg-gray-200 align-middle dark:bg-gray-700"
+                        />
+                      ) : (
+                        matchedOrders.toLocaleString()
+                      )}
                     </span>
                   </span>
                 </div>

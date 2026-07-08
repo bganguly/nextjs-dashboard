@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDailyAggregates, getExactAggregateTotal, isAppError } from "@/lib/services";
+import { COUNT_SENTINEL, getDailyAggregates, getExactAggregateTotal, isAppError } from "@/lib/services";
 
 // GET /api/aggregates?from=YYYY-MM-DD&to=YYYY-MM-DD&topCategories=<N>
 //   filters (same as /api/orders): &status=&regionCode=&minTotal=&maxTotal=
@@ -31,7 +31,12 @@ export async function GET(req: NextRequest) {
       getDailyAggregates(query),
       getExactAggregateTotal(query),
     ]);
-    return NextResponse.json({ data, totalOrders });
+    const approximate = totalOrders === COUNT_SENTINEL;
+    return NextResponse.json({
+      data,
+      totalOrders: approximate ? 10_000 : totalOrders,
+      ...(approximate ? { totalOrdersApproximate: true } : {}),
+    });
   } catch (err) {
     if (isAppError(err)) {
       return NextResponse.json({ error: err.message, code: err.code }, { status: err.status });
