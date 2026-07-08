@@ -145,6 +145,9 @@ interface ChartProps {
   controlledLoading?: boolean;
   controlledError?: string | null;
   onRangeChange?: (range: { from: string; to: string }) => void;
+  /** Fired with the client-side summed category total whenever it changes, so
+   *  the parent can hand the same number to SearchTable's list footer. */
+  onTotalChange?: (n: number) => void;
 }
 
 // Stable palette for stacked series. Cycled if there are more series than colors.
@@ -193,12 +196,9 @@ export default function Chart({
   controlledLoading = false,
   controlledError = null,
   onRangeChange,
+  onTotalChange,
 }: ChartProps) {
   const [rawData, setRawData] = useState<RawAggregate[]>([]);
-  // Exact distinct order count from the backend (getExactAggregateTotal) —
-  // null until the first response lands, then preferred over summing category
-  // rows (see the matchedOrders fallback below) for the header/Total tile.
-  const [exactTotal, setExactTotal] = useState<number | null>(null);
   const [range, setRange] = useState(defaultRange);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -262,7 +262,6 @@ export default function Chart({
         // overwrite the correct state from the request that superseded it.
         if (abortRef.current !== controller) return;
         setRawData(Array.isArray(json.data) ? json.data : []);
-        setExactTotal(typeof json.totalOrders === "number" ? json.totalOrders : null);
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
         if (abortRef.current !== controller) return;
@@ -367,11 +366,9 @@ export default function Chart({
       };
       return next;
     });
-    // Keep the exact total in step with the same optimistic bump — a real
-    // refetch (triggered by the same SSE event via refreshSignal) will correct
-    // it shortly after with the authoritative backend count regardless.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setExactTotal((prev) => (prev == null ? prev : prev + 1));
+    // No separate exact-total bump needed here: matchedOrders now derives
+    // from summedCategoryOrders, which is a useMemo over rawData — the
+    // setRawData optimistic bump above already flows through automatically.
     // searchQuery/filters intentionally omitted: read via closure at the
     // render where lastSseOrder changed, which is what we want — re-running
     // this effect on a pure filter change (no new order) would be a no-op
@@ -407,10 +404,13 @@ export default function Chart({
     [rawData],
   );
 
-  // Fallback total when the backend didn't send totalOrders (e.g. controlled
-  // mode) — summing per-category counts OVERCOUNTS any order whose items span
-  // more than one category, since each such category gets totalOrders=1 for
-  // that order. Only used when exactTotal is unavailable; prefer that instead.
+  // Client-side sum of per-category counts — this IS the Total tile's number
+  // now (previously overridden by a separate backend exact-distinct-order
+  // count, which could disagree with a visible category tile and confuse
+  // users, e.g. "Others 76,622 > Total 10,001" when the backend total was
+  // capped). Still overcounts any order whose items span more than one
+  // category (each such category gets totalOrders=1 for that order), but
+  // that's now the one consistent number shown everywhere.
   const summedCategoryOrders = useMemo(
     () =>
       rawData.reduce((sum, day) => {
@@ -422,7 +422,14 @@ export default function Chart({
       }, 0),
     [rawData],
   );
-  const matchedOrders = exactTotal ?? summedCategoryOrders;
+  const matchedOrders = summedCategoryOrders;
+
+  // Propagate the Total tile's number to the parent so SearchTable's list
+  // footer/last-page button can show the exact same figure instead of its
+  // own (potentially capped) backend total.
+  useEffect(() => {
+    onTotalChange?.(summedCategoryOrders);
+  }, [summedCategoryOrders, onTotalChange]);
 
   // Stack only the top N *real* categories; everything else (including any
   // backend-provided "Other"/"Others" pseudo-category) rolls into a single

@@ -48,6 +48,11 @@ interface SearchTableProps {
   controlledLoading?: boolean;
   controlledError?: string | null;
   onRequestStateChange?: (state: TableRequestState) => void;
+  /** Chart's client-side summed Total (see Chart's onTotalChange), shown in
+   *  the footer instead of this table's own backend total so both numbers
+   *  always agree. Null while the chart's own data is still loading — the
+   *  footer shows a skeleton pulse in that window rather than a stale figure. */
+  externalTotal?: number | null;
 }
 
 function cn(...classes: (string | false | undefined)[]): string {
@@ -144,6 +149,7 @@ export default function SearchTable({
   controlledLoading = false,
   controlledError = null,
   onRequestStateChange,
+  externalTotal = null,
 }: SearchTableProps) {
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -266,8 +272,10 @@ export default function SearchTable({
             .then((r) => (r.ok ? r.json() : Promise.reject()))
             .then((data) => {
               if (countAbortRef.current !== countController) return;
-              setTotal(data.total);
-              setApproximate(false);
+              // Display total now comes from the chart (externalTotal) — this
+              // only refines totalPages so Prev/Next/last-page navigation
+              // reflects the real (uncapped) page count once it's known.
+              setTotalPages(Math.max(1, Math.ceil(data.total / pageSize)));
               setRefiningCount(false);
             })
             .catch(() => {
@@ -685,10 +693,15 @@ export default function SearchTable({
       <footer className="mt-4 flex flex-wrap items-center justify-between gap-3">
         <span className="text-xs text-gray-500 dark:text-gray-400">
           Page {page} of {totalPages} ·{" "}
-          <span data-testid="search-total" data-total={total}>
-            {approximate
-              ? `${total.toLocaleString()}+${refiningCount ? "…" : ""}`
-              : total.toLocaleString()}
+          <span data-testid="search-total" data-total={externalTotal ?? total}>
+            {externalTotal != null ? (
+              externalTotal.toLocaleString()
+            ) : (
+              <span
+                aria-hidden
+                className="inline-block h-3 w-12 animate-pulse rounded bg-gray-300 align-middle dark:bg-gray-700"
+              />
+            )}
           </span>{" "}
           results
         </span>
@@ -708,7 +721,14 @@ export default function SearchTable({
                 </button>
               </li>
 
-              {pageItems.map((item) => {
+              {pageItems.map((item, index) => {
+                // The right-ellipsis, when present, always immediately
+                // precedes the last-page entry (see getPageItems) — hide it
+                // too while that entry is showing a skeleton, so there's no
+                // dangling "…" pointing at nothing.
+                if (item === "right-ellipsis" && refiningCount) {
+                  return null;
+                }
                 if (item === "left-ellipsis" || item === "right-ellipsis") {
                   return (
                     <li
@@ -717,6 +737,19 @@ export default function SearchTable({
                       className="px-2 text-sm text-gray-400"
                     >
                       …
+                    </li>
+                  );
+                }
+                // The last entry in pageItems is always the last-page number
+                // (see getPageItems). Its value can still be wrong while a
+                // capped count is being refined in the background — show a
+                // skeleton instead of a clickable number that might jump.
+                if (index === pageItems.length - 1 && refiningCount) {
+                  return (
+                    <li key="last-page-skeleton" aria-hidden>
+                      <span className="flex h-9 min-w-9 items-center justify-center rounded-md px-3">
+                        <span className="h-4 w-4 animate-pulse rounded bg-gray-300 dark:bg-gray-700" />
+                      </span>
                     </li>
                   );
                 }

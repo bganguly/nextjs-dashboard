@@ -63,6 +63,11 @@ export default function Dashboard() {
   const [regionOptions, setRegionOptions] = useState<RegionOption[]>([]);
   // Active search query, lifted from SearchTable so the chart can match it.
   const [searchQuery, setSearchQuery] = useState("");
+  // Chart's client-side summed Total tile, propagated down to SearchTable's
+  // list footer so both numbers are always the same figure (see Chart's
+  // onTotalChange). Reset to null on filter/search changes below so the list
+  // shows a skeleton rather than a stale number while new chart data loads.
+  const [chartTotal, setChartTotal] = useState<number | null>(null);
   // Category whose aggregate tile should briefly pulse after an SSE order.
   const [updatingSlug, setUpdatingSlug] = useState<string | null>(null);
   // Last SSE order, used to patch the chart's bars IN PLACE (Task 16) instead of
@@ -144,6 +149,11 @@ export default function Dashboard() {
     setRegionOptions((prev) => mergeRegions(prev, incoming));
   }, []);
 
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setChartTotal(null);
+  }, [filters, searchQuery]);
+
   return (
     <div className="min-h-screen bg-zinc-50 font-sans dark:bg-black">
       <main className="w-full px-5 py-8">
@@ -224,6 +234,7 @@ export default function Dashboard() {
                   onRangeChange={(range) =>
                     setFilters((f) => ({ ...f, from: range.from, to: range.to }))
                   }
+                  onTotalChange={setChartTotal}
                 />
                 <SearchTable
                   refreshSignal={refreshSignal}
@@ -232,6 +243,7 @@ export default function Dashboard() {
                   onQueryChange={setSearchQuery}
                   highlightId={lastOrder?.id}
                   highlightKey={lastOrder?.seq}
+                  externalTotal={chartTotal}
                 />
               </div>
               {liveEnabled && (
