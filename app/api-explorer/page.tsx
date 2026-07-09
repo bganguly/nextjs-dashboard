@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 
-const PORTFOLIO_URL = "https://bganguly.github.io";
+const PORTFOLIO_URL = "https://bganguly.github.io/?open=nextjs";
 
 // ── Palette constants (match GCP api-explorer.html) ──────────────────────────
 const S = {
