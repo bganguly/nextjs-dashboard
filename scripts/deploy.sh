@@ -330,6 +330,7 @@ rsync -az --delete \
 QUICKORDER_DIR="$(cd "$ROOT_DIR/../websockets-quickorder" 2>/dev/null && pwd || true)"
 QUICKORDER_URL=""
 [[ -n "$QUICKORDER_DIR" ]] && QUICKORDER_URL=$(cd "$QUICKORDER_DIR/infra" 2>/dev/null && terraform output -raw cdn_url 2>/dev/null || true)
+[[ "$QUICKORDER_URL" =~ ^https?:// ]] || QUICKORDER_URL=""
 if [[ -z "$QUICKORDER_URL" ]]; then
   QUICKORDER_URL="http://localhost:3005"
   echo ""
@@ -403,6 +404,7 @@ NGINX_CONF
 REMOTE
 
 CDN_URL="$(cd "$ROOT_DIR/infra" && terraform output -raw cdn_url 2>/dev/null || true)"
+[[ "$CDN_URL" =~ ^https?:// ]] || CDN_URL=""
 
 _BASE_URL="${CDN_URL:-http://${EC2_IP}}"
 echo ""
