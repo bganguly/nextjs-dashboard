@@ -716,6 +716,12 @@ export default function ApiExplorer() {
             <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background:"#818cf8" }} />
             {typeof window !== "undefined" ? window.location.origin : ""}/api
           </div>
+          {process.env.NEXT_PUBLIC_DEMO_SCALE && (
+            <span className="text-[11px] px-2 py-1 rounded-lg font-medium"
+              style={{ background:"rgba(99,102,241,0.10)", border:"1px solid rgba(99,102,241,0.25)", color:"#818cf8" }}>
+              demo · {process.env.NEXT_PUBLIC_DEMO_SCALE}
+            </span>
+          )}
         </div>
       </section>
 

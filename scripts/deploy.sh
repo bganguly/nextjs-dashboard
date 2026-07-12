@@ -342,6 +342,8 @@ if [[ -z "$QUICKORDER_URL" ]]; then
   echo ""
 fi
 
+DEMO_SCALE="$( [[ "$DEPLOY_MODE" == "full" ]] && echo '~4M demo orders' || echo '~500K demo orders' )"
+
 echo "  Starting dashboard on EC2..."
 ssh $SSH_OPTS "ec2-user@${EC2_IP}" bash <<REMOTE
   set -e
@@ -364,6 +366,7 @@ ssh $SSH_OPTS "ec2-user@${EC2_IP}" bash <<REMOTE
   # Quick Order check runs in the VISITOR's browser against their own
   # localhost instead of Quick Order's actual (separate) deployed instance.
   export NEXT_PUBLIC_QUICK_ORDER_URL='${QUICKORDER_URL}'
+  export NEXT_PUBLIC_DEMO_SCALE='${DEMO_SCALE}'
   npm run build
   pm2 stop dashboard 2>/dev/null || true
   pm2 start "npm start" --name dashboard
