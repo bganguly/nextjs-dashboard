@@ -410,7 +410,7 @@ PORTFOLIO_SET_LIVE="$(cd "$ROOT_DIR/../../../portfolio/scripts" 2>/dev/null && p
 if [[ -n "$CDN_URL" && -f "$PORTFOLIO_SET_LIVE" ]]; then
   echo ""
   echo "  Updating portfolio live-urls.js..."
-  bash "$PORTFOLIO_SET_LIVE" nextjs "$CDN_URL" "$CDN_URL/api-explorer"
+  bash "$PORTFOLIO_SET_LIVE" --tier "$DEPLOY_MODE" nextjs "$CDN_URL" "$CDN_URL/api-explorer"
 fi
 echo "  Direct (HTTP):     http://${EC2_IP}"
 echo "  Quick Order at:    ${QUICKORDER_URL}  (separate instance — deploy via websockets-quickorder/scripts/deploy.sh)"
