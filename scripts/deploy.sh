@@ -340,32 +340,17 @@ rsync -az --delete \
   -e "ssh $SSH_OPTS" \
   "$ROOT_DIR/" "ec2-user@${EC2_IP}:/app/"
 
-# Quick Order now lives on its OWN separate EC2 instance/IP (see
-# websockets-quickorder/infra) — read its Terraform output rather than
-# hardcoding a same-host path, so this keeps working across its redeploys.
-# Use its HTTPS CloudFront URL, not the plain-http EIP: this dashboard is
-# itself served over HTTPS (via CloudFront), and a browser fetch from an
-# HTTPS page to a plain-http endpoint is blocked as mixed content.
-# Unlike Quick Order's dependency on US (which has no working fallback and
-# must abort/opt-in), the dashboard degrades gracefully without Quick Order —
-# the "Live" checkbox already shows an in-app "isn't running" banner. So an
-# out-of-order run here (dashboard deployed before Quick Order) just warns
-# with the exact fix command and continues, rather than aborting.
 QUICKORDER_DIR="$(cd "$ROOT_DIR/../websockets-quickorder" 2>/dev/null && pwd || true)"
+QUICKORDER_DEPLOY="${QUICKORDER_DIR}/scripts/deploy.sh"
 QUICKORDER_URL=""
-[[ -n "$QUICKORDER_DIR" ]] && QUICKORDER_URL=$(cd "$QUICKORDER_DIR/infra" 2>/dev/null && terraform output -raw cdn_url 2>/dev/null || true)
-[[ "$QUICKORDER_URL" =~ ^https?:// ]] || QUICKORDER_URL=""
-if [[ -z "$QUICKORDER_URL" ]]; then
-  QUICKORDER_URL="http://localhost:3005"
+if [[ -f "$QUICKORDER_DEPLOY" ]]; then
   echo ""
-  echo "  Note: Quick Order's Terraform output isn't available yet (not deployed, or"
-  echo "  deployed out of order) — NEXT_PUBLIC_QUICK_ORDER_URL will fall back to"
-  echo "  $QUICKORDER_URL, so the deployed dashboard's 'Live' checkbox will show its"
-  echo "  built-in 'Quick Order isn't running' banner until you deploy it:"
-  echo "    cd ${QUICKORDER_DIR:-../websockets-quickorder} && ./scripts/deploy.sh"
-  echo "  Then redeploy the dashboard to pick up the new URL."
-  echo ""
+  echo "  Deploying Quick Order (${DEPLOY_MODE}) inline — dashboard build needs its URL..."
+  DEPLOY_MODE="$DEPLOY_MODE" BACKEND_URL="http://${EC2_IP}" bash "$QUICKORDER_DEPLOY"
+  QUICKORDER_URL=$(cd "$QUICKORDER_DIR/infra" && terraform workspace select "$DEPLOY_MODE" >/dev/null 2>&1 && terraform output -raw cdn_url 2>/dev/null || true)
+  [[ "$QUICKORDER_URL" =~ ^https?:// ]] || QUICKORDER_URL=""
 fi
+[[ -n "$QUICKORDER_URL" ]] || QUICKORDER_URL="http://localhost:3005"
 
 DEMO_SCALE="$( [[ "$DEPLOY_MODE" == "full" ]] && echo '~4M demo orders' || echo '~500K demo orders' )"
 
@@ -440,13 +425,6 @@ if [[ -n "$CDN_URL" && -f "$PORTFOLIO_SET_LIVE" ]]; then
   echo ""
   echo "  Updating portfolio live-urls.js..."
   bash "$PORTFOLIO_SET_LIVE" --tier "$DEPLOY_MODE" nextjs "$CDN_URL" "$CDN_URL/api-explorer"
-fi
-
-QUICKORDER_DEPLOY="$(cd "$ROOT_DIR/../websockets-quickorder/scripts" 2>/dev/null && pwd || true)/deploy.sh"
-if [[ -f "$QUICKORDER_DEPLOY" ]]; then
-  echo ""
-  echo "  Chaining Quick Order deploy (${DEPLOY_MODE}, backend: http://${EC2_IP})..."
-  DEPLOY_MODE="$DEPLOY_MODE" BACKEND_URL="http://${EC2_IP}" bash "$QUICKORDER_DEPLOY"
 fi
 
 echo "  Direct (HTTP):     http://${EC2_IP}"
