@@ -153,6 +153,11 @@ echo "Locking DB access to allowed_cidr=$ALLOWED_CIDR"
 cd "$INFRA_DIR"
 step "3/7 Initializing Terraform providers/state." "< 1 min"
 terraform init -input=false
+_WS="${DEPLOY_WORKSPACE:-full}"
+terraform workspace select "$_WS" 2>/dev/null \
+  || terraform workspace new "$_WS" 2>/dev/null \
+  || terraform workspace select "$_WS"
+printf '    workspace: %s\n' "$_WS"
 
 step "4/7 Reconciling state with live AWS infra." "< 1 min"
 echo "    Adopting an existing database if state drifted; only clearing genuinely orphaned leftovers."
@@ -198,6 +203,15 @@ PGUSER=$DB_USER
 EOF
 
 printf '\nWrote %s (DATABASE_URL + PG* vars).\n' "$ROOT_DIR/.env.rds"
+
+CDN_URL="$(terraform output -raw cdn_url 2>/dev/null || true)"
+if [[ "$CDN_URL" =~ ^https?:// ]]; then
+  PORTFOLIO_SET_LIVE="$(cd "$ROOT_DIR/../../../portfolio/scripts" 2>/dev/null && pwd || true)/set-live-url.sh"
+  if [[ -f "$PORTFOLIO_SET_LIVE" ]]; then
+    printf '    Updating portfolio live-urls.js (nextjs/%s -> %s)...\n' "$_WS" "$CDN_URL"
+    bash "$PORTFOLIO_SET_LIVE" --tier "$_WS" nextjs "$CDN_URL" "$CDN_URL/api-explorer"
+  fi
+fi
 
 # When called from deploy.sh (remote flow), these local-dev hints don't apply —
 # deploy.sh drives migrations/build/start on EC2 itself and prints its own summary.
