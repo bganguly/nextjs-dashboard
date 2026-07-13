@@ -52,8 +52,6 @@ function eventDay(raw: unknown): string | undefined {
 
 const QUICK_ORDER_URL = process.env.NEXT_PUBLIC_QUICK_ORDER_URL ?? "http://localhost:3005";
 
-const QUICK_ORDER_DEV_DIR =
-  "/Users/bikram/Personal/interview-prep/grouped-projects/nextjs/websockets-quickorder";
 
 export default function Dashboard() {
   const [refreshSignal, setRefreshSignal] = useState(0);
@@ -197,21 +195,15 @@ export default function Dashboard() {
                 />
                 Live
               </label>
+              {liveEnabled && quickOrderUnavailable && (
+                <span className="text-xs text-gray-400 dark:text-gray-500" title={`Quick Order not reachable at ${QUICK_ORDER_URL}`}>
+                  Quick Order offline
+                </span>
+              )}
             <ThemeToggle />
           </div>
         </header>
 
-        {liveEnabled && quickOrderUnavailable && (
-          <div className="mb-6 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
-            <p className="font-medium">
-              Quick Order UI isn&apos;t running at {QUICK_ORDER_URL}.
-            </p>
-            <p className="mt-1">Start it, then re-check the Live box:</p>
-            <pre className="mt-1 overflow-x-auto rounded bg-black/5 px-2 py-1 font-mono text-xs dark:bg-white/10">
-              cd {QUICK_ORDER_DEV_DIR} && npm run dev
-            </pre>
-          </div>
-        )}
 
         <div className="flex flex-col gap-6 lg:flex-row">
           <FilterSidebar
