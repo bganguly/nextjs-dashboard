@@ -253,6 +253,94 @@ resource "aws_db_instance" "pg" {
   tags = { Name = "${var.name_prefix}-db" }
 }
 
+# ── EventBridge Scheduler: auto start/stop 8 am – 5 pm weekdays Pacific ──────
+
+resource "aws_iam_role" "scheduler" {
+  name = "${var.name_prefix}-scheduler"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "scheduler.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "scheduler" {
+  name = "${var.name_prefix}-scheduler"
+  role = aws_iam_role.scheduler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["ec2:StartInstances", "ec2:StopInstances"]
+        Resource = aws_instance.app.arn
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["rds:StartDBInstance", "rds:StopDBInstance"]
+        Resource = aws_db_instance.pg.arn
+      }
+    ]
+  })
+}
+
+resource "aws_scheduler_schedule" "start_ec2" {
+  name       = "${var.name_prefix}-start-ec2"
+  group_name = "default"
+  flexible_time_window { mode = "OFF" }
+  schedule_expression          = "cron(0 8 ? * MON-FRI *)"
+  schedule_expression_timezone = "America/Los_Angeles"
+  target {
+    arn      = "arn:aws:scheduler:::aws-sdk:ec2:startInstances"
+    role_arn = aws_iam_role.scheduler.arn
+    input    = jsonencode({ InstanceIds = [aws_instance.app.id] })
+  }
+}
+
+resource "aws_scheduler_schedule" "start_rds" {
+  name       = "${var.name_prefix}-start-rds"
+  group_name = "default"
+  flexible_time_window { mode = "OFF" }
+  schedule_expression          = "cron(0 8 ? * MON-FRI *)"
+  schedule_expression_timezone = "America/Los_Angeles"
+  target {
+    arn      = "arn:aws:scheduler:::aws-sdk:rds:startDBInstance"
+    role_arn = aws_iam_role.scheduler.arn
+    input    = jsonencode({ DbInstanceIdentifier = aws_db_instance.pg.identifier })
+  }
+}
+
+resource "aws_scheduler_schedule" "stop_ec2" {
+  name       = "${var.name_prefix}-stop-ec2"
+  group_name = "default"
+  flexible_time_window { mode = "OFF" }
+  schedule_expression          = "cron(0 17 ? * MON-FRI *)"
+  schedule_expression_timezone = "America/Los_Angeles"
+  target {
+    arn      = "arn:aws:scheduler:::aws-sdk:ec2:stopInstances"
+    role_arn = aws_iam_role.scheduler.arn
+    input    = jsonencode({ InstanceIds = [aws_instance.app.id] })
+  }
+}
+
+resource "aws_scheduler_schedule" "stop_rds" {
+  name       = "${var.name_prefix}-stop-rds"
+  group_name = "default"
+  flexible_time_window { mode = "OFF" }
+  schedule_expression          = "cron(0 17 ? * MON-FRI *)"
+  schedule_expression_timezone = "America/Los_Angeles"
+  target {
+    arn      = "arn:aws:scheduler:::aws-sdk:rds:stopDBInstance"
+    role_arn = aws_iam_role.scheduler.arn
+    input    = jsonencode({ DbInstanceIdentifier = aws_db_instance.pg.identifier })
+  }
+}
+
 # Stable public IP for the app instance — without this, any stop/restart
 # (e.g. attaching an IAM instance profile, or routine AWS maintenance)
 # silently reassigns a new dynamic IP, breaking any URL/bookmark pointing at
