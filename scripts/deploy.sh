@@ -542,6 +542,26 @@ if [[ -n "$CDN_URL" && -f "$PORTFOLIO_SET_LIVE" ]]; then
   bash "$PORTFOLIO_SET_LIVE" --tier "$DEPLOY_MODE" nextjs "$CDN_URL" "$CDN_URL/api-explorer"
 fi
 
+# Update README Live Service URLs with the live endpoint from this deploy.
+if [[ -f "$ROOT_DIR/README.md" ]]; then
+  python3 - "$_BASE_URL" "$ROOT_DIR/README.md" <<'PYEOF'
+import re, sys
+url, path = sys.argv[1], sys.argv[2]
+content = open(path).read()
+content = re.sub(r'(\| \*\*Dashboard\*\* \| )(https?://\S+)( \|)', r'\g<1>' + url + r'\g<3>', content)
+content = re.sub(r'(\| \*\*API Explorer\*\* \| )(https?://\S+)( \|)', r'\g<1>' + url + '/api-explorer' + r'\g<3>', content)
+content = re.sub(r'(# AWS[^\n]*\nBASE=)\S+', r'\g<1>' + url, content)
+open(path, 'w').write(content)
+PYEOF
+  cd "$ROOT_DIR"
+  git add README.md
+  if ! git diff --cached --quiet; then
+    git commit -m "deploy: update live URL → ${_BASE_URL}"
+    git push origin HEAD:main
+    echo "  README updated and pushed."
+  fi
+fi
+
 echo "  Direct (HTTP):     http://${EC2_IP}"
 echo "  Quick Order at:    ${QUICKORDER_URL}  (separate instance)"
 echo "  SSH:               ssh -i ${SSH_KEY} ec2-user@${EC2_IP}"

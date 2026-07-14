@@ -66,7 +66,8 @@ EC2 and RDS auto-stop on a weekday schedule managed by EventBridge Scheduler:
 
 | | URL |
 |---|---|
-| **Dashboard** | `http://<ec2-public-ip>:3004` |
+| **Dashboard** | https://df9jh7fbcc9nk.cloudfront.net |
+| **API Explorer** | https://df9jh7fbcc9nk.cloudfront.net/api-explorer |
 
 ```bash
 # local
@@ -75,8 +76,8 @@ curl "$BASE/api/orders?page=1&pageSize=3" | jq .total
 curl "$BASE/api/orders?q=sara+frank&page=1&pageSize=3" | jq '.data[].customer'
 curl "$BASE/api/aggregates?from=2024-01-01&to=2024-12-31" | jq 'length'
 
-# AWS — address printed by deploy.sh after infra is up
-BASE=http://<ec2-public-ip>:3004
+# AWS — updated by deploy.sh on each successful deploy
+BASE=https://df9jh7fbcc9nk.cloudfront.net
 curl "$BASE/api/orders?page=1&pageSize=3" | jq .total
 curl "$BASE/api/orders?q=sara+frank&page=1&pageSize=3" | jq '.data[].customer'
 curl "$BASE/api/aggregates?from=2024-01-01&to=2024-12-31" | jq 'length'
