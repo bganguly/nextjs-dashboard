@@ -37,13 +37,28 @@ Browser ──HTTP──► Next.js API routes ──Prisma──► AWS RDS PG 
 ## Running
 
 ```bash
-./scripts/deploy.sh
+./scripts/deploy.sh      # local [1] or AWS RDS [2]
+./scripts/infra-down.sh  # stop local [1] or teardown AWS [2]
 ```
 
-Provisions AWS RDS if not up, applies schema + SQL migrations, builds and starts the production
-server (`npm run build && npm start`) on port 3004 pointed at remote RDS.
+### Cost control — scheduled 8am–5pm Pacific window (weekdays)
 
-Prerequisites: `aws` CLI configured, `psql`, `node` 18+, `npx`.
+EC2 and RDS auto-stop on a weekday schedule managed by EventBridge Scheduler:
+
+| Resource | Scale-up | Scale-down | Idle cost |
+|---|---|---|---|
+| **EC2** (t3.small / t3.medium) | 8am PT Mon–Fri | 5pm PT Mon–Fri | ~$0 (stopped instance) |
+| **RDS** (db.t3.micro / db.t3.large) | 8am PT Mon–Fri | 5pm PT Mon–Fri | ~$0 (stopped, storage only) |
+
+`./scripts/deploy.sh` shows an interactive prompt at the top of every remote run:
+
+```
+  EC2: running       RDS: available
+  Auto-schedule: starts 8 am · stops 5 pm · weekdays Pacific · state=ENABLED
+  [1] Start now  [2] Stop now  [3] Suspend schedule  [4] Resume schedule  [enter] Continue:
+```
+
+> **Note:** AWS auto-restarts a stopped RDS instance after 7 continuous days — the weekday schedule prevents this from happening unintentionally.
 
 ---
 
@@ -51,10 +66,17 @@ Prerequisites: `aws` CLI configured, `psql`, `node` 18+, `npx`.
 
 | | URL |
 |---|---|
-| **Dashboard** | `http://<ec2-ip>:3004` |
+| **Dashboard** | `http://<ec2-public-ip>:3004` |
 
 ```bash
-BASE=http://<ec2-ip>:3004   # address printed by deploy.sh after infra is up
+# local
+BASE=http://localhost:3004
+curl "$BASE/api/orders?page=1&pageSize=3" | jq .total
+curl "$BASE/api/orders?q=sara+frank&page=1&pageSize=3" | jq '.data[].customer'
+curl "$BASE/api/aggregates?from=2024-01-01&to=2024-12-31" | jq 'length'
+
+# AWS — address printed by deploy.sh after infra is up
+BASE=http://<ec2-public-ip>:3004
 curl "$BASE/api/orders?page=1&pageSize=3" | jq .total
 curl "$BASE/api/orders?q=sara+frank&page=1&pageSize=3" | jq '.data[].customer'
 curl "$BASE/api/aggregates?from=2024-01-01&to=2024-12-31" | jq 'length'
