@@ -111,7 +111,7 @@ data "aws_ami" "amazon_linux" {
   owners      = ["amazon"]
   filter {
     name   = "name"
-    values = ["al2023-ami-*-x86_64"]
+    values = ["al2023-ami-minimal-*-x86_64"]
   }
   filter {
     name   = "virtualization-type"
@@ -279,11 +279,6 @@ resource "aws_iam_role_policy" "scheduler" {
         Effect   = "Allow"
         Action   = ["ec2:StartInstances", "ec2:StopInstances"]
         Resource = aws_instance.app.arn
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["rds:StartDBInstance", "rds:StopDBInstance"]
-        Resource = aws_db_instance.pg.arn
       }
     ]
   })
@@ -302,19 +297,6 @@ resource "aws_scheduler_schedule" "start_ec2" {
   }
 }
 
-resource "aws_scheduler_schedule" "start_rds" {
-  name       = "${var.name_prefix}-start-rds"
-  group_name = "default"
-  flexible_time_window { mode = "OFF" }
-  schedule_expression          = "cron(0 8 ? * MON-FRI *)"
-  schedule_expression_timezone = "America/Los_Angeles"
-  target {
-    arn      = "arn:aws:scheduler:::aws-sdk:rds:startDBInstance"
-    role_arn = aws_iam_role.scheduler.arn
-    input    = jsonencode({ DbInstanceIdentifier = aws_db_instance.pg.identifier })
-  }
-}
-
 resource "aws_scheduler_schedule" "stop_ec2" {
   name       = "${var.name_prefix}-stop-ec2"
   group_name = "default"
@@ -325,19 +307,6 @@ resource "aws_scheduler_schedule" "stop_ec2" {
     arn      = "arn:aws:scheduler:::aws-sdk:ec2:stopInstances"
     role_arn = aws_iam_role.scheduler.arn
     input    = jsonencode({ InstanceIds = [aws_instance.app.id] })
-  }
-}
-
-resource "aws_scheduler_schedule" "stop_rds" {
-  name       = "${var.name_prefix}-stop-rds"
-  group_name = "default"
-  flexible_time_window { mode = "OFF" }
-  schedule_expression          = "cron(0 17 ? * MON-FRI *)"
-  schedule_expression_timezone = "America/Los_Angeles"
-  target {
-    arn      = "arn:aws:scheduler:::aws-sdk:rds:stopDBInstance"
-    role_arn = aws_iam_role.scheduler.arn
-    input    = jsonencode({ DbInstanceIdentifier = aws_db_instance.pg.identifier })
   }
 }
 

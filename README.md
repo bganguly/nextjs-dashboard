@@ -43,24 +43,24 @@ Browser ──HTTP──► Next.js API routes ──Prisma──► AWS RDS PG 
 
 ### Cost control — scheduled 8am–5pm Pacific window (weekdays)
 
-EC2 and RDS auto-stop on a weekday schedule managed by EventBridge Scheduler:
+EC2 auto-stops on a weekday schedule managed by EventBridge Scheduler. **RDS runs 24/7** — stopping it flushes PostgreSQL `shared_buffers`, making the first search of every morning cold (~1 s on EBS). Keeping RDS up matches the GCP pattern where the Postgres VM never stops.
 
-| Resource | Scale-up | Scale-down | Idle cost | ~$/mo scheduled ¹ | ~$/mo 24/7 |
-|---|---|---|---|---|---|
-| **EC2 t3.small** (lite & full) | 8am PT Mon–Fri | 5pm PT Mon–Fri | ~$0 (stopped) | ~$4 | ~$15 |
-| **RDS db.t3.micro** (lite) + 20 GB storage | 8am PT Mon–Fri | 5pm PT Mon–Fri | ~$0 (stopped) + $2 storage | ~$5 | ~$14 |
-| **RDS db.t3.large** (full) + 50 GB storage | 8am PT Mon–Fri | 5pm PT Mon–Fri | ~$0 (stopped) + $6 storage | ~$35 | ~$110 |
-| **Lite total** | | | | **~$9/mo** | **~$29/mo** |
-| **Full total** | | | | **~$39/mo** | **~$125/mo** |
+| Resource | Scale-up | Scale-down | Idle cost | ~$/mo ¹ |
+|---|---|---|---|---|
+| **EC2 t3.small** (lite & full) | 8am PT Mon–Fri | 5pm PT Mon–Fri | ~$0 (stopped) | ~$4 |
+| **RDS db.t3.micro** (lite) + 20 GB storage | always-on | always-on | billed continuously | ~$14 |
+| **RDS db.t3.large** (full) + 50 GB storage | always-on | always-on | billed continuously | ~$110 |
+| **Lite total** | | | | **~$18/mo** |
+| **Full total** | | | | **~$124/mo** |
 
-¹ Scheduled = 8 am–5 pm PT weekdays ≈ 200 hrs/month active. Prices are on-demand us-east-1; RDS storage billed regardless of instance state.
+¹ EC2 ≈ 200 hrs/month active (scheduled); RDS 720 hrs/month. On-demand us-east-1 pricing.
 
-> **Cold-cache note:** stopping RDS flushes PostgreSQL's `shared_buffers`. First search of each morning (e.g. a multi-word query) hits cold EBS and takes ~1 s on db.t3.micro. Keeping RDS running 24/7 (+$8/mo lite, +$75/mo full) eliminates this — matching the GCP pattern where the Postgres VM never stops.
+> **Savings if you also stop RDS on schedule** (~$8/mo lite, ~$75/mo full): re-enable by adding back `start_rds` / `stop_rds` schedules in `infra/main.tf` — at the cost of cold-cache first-search latency each morning.
 
 `./scripts/deploy.sh` shows an interactive prompt at the top of every remote run:
 
 ```
-  EC2: running       RDS: available
+  EC2: running       RDS: available (always-on)
   Auto-schedule: starts 8 am · stops 5 pm · weekdays Pacific · state=ENABLED
   [1] Start now  [2] Stop now  [3] Suspend schedule  [4] Resume schedule  [enter] Continue:
 ```

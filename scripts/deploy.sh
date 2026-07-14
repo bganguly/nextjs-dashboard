@@ -183,8 +183,8 @@ _SCHED_UP_STATE=$(aws scheduler get-schedule \
 
 _update_schedules() {
   local _state="$1" _sched _cur _expr _tz _tgt
-  for _sched in "${TF_VAR_name_prefix}-start-ec2" "${TF_VAR_name_prefix}-start-rds" \
-                "${TF_VAR_name_prefix}-stop-ec2"  "${TF_VAR_name_prefix}-stop-rds"; do
+  for _sched in "${TF_VAR_name_prefix}-start-ec2" \
+                "${TF_VAR_name_prefix}-stop-ec2"; do
     if ! _cur=$(aws scheduler get-schedule --name "$_sched" --output json 2>/dev/null); then
       printf '  (schedule %s not found — run a full deploy first)\n' "$_sched"
       continue
@@ -220,27 +220,20 @@ case "${_PRE_ACTION:-}" in
     if [[ -n "$_P_EC2_ID" ]]; then
       printf '  Starting EC2 (%s)...\n' "$_P_EC2_ID"
       aws ec2 start-instances --instance-ids "$_P_EC2_ID" --no-cli-pager >/dev/null
+      printf '  Done — EC2 will be ready in ~1 min. RDS runs 24/7 and is already available.\n'
     else
-      printf '  EC2 not found \xe2\x80\x94 nothing to start (deploy first).\n'
+      printf '  EC2 not found — nothing to start (deploy first).\n'
     fi
-    printf '  Starting RDS (%s)...\n' "${TF_VAR_name_prefix}-db"
-    aws rds start-db-instance --db-instance-identifier "${TF_VAR_name_prefix}-db" --no-cli-pager >/dev/null 2>&1 \
-      || printf '  (RDS not found or already running)\n'
-    printf '  Done \xe2\x80\x94 RDS takes ~3-5 min to become available.\n'
     exit 0
     ;;
   2)
     if [[ -n "$_P_EC2_ID" ]]; then
       printf '  Stopping EC2 (%s)...\n' "$_P_EC2_ID"
       aws ec2 stop-instances --instance-ids "$_P_EC2_ID" --no-cli-pager >/dev/null
+      printf '  Stopped — EBS storage still billed; no EC2 compute charges. RDS continues running.\n'
     else
-      printf '  EC2 not found \xe2\x80\x94 nothing to stop.\n'
+      printf '  EC2 not found — nothing to stop.\n'
     fi
-    printf '  Stopping RDS (%s)...\n' "${TF_VAR_name_prefix}-db"
-    aws rds stop-db-instance --db-instance-identifier "${TF_VAR_name_prefix}-db" --no-cli-pager >/dev/null 2>&1 \
-      || printf '  (RDS not found or already stopped)\n'
-    printf '  Stopped \xe2\x80\x94 EBS + RDS storage still billed; no compute charges.\n'
-    printf '  Note: AWS auto-restarts RDS after 7 continuous days stopped.\n'
     exit 0
     ;;
   3)
@@ -250,13 +243,12 @@ case "${_PRE_ACTION:-}" in
     if [[ "$_SCHED_UP_STATE" == "DISABLED" ]]; then
       printf '  Schedule is already DISABLED \xe2\x80\x94 nothing to do.\n'; exit 0
     fi
-    if [[ "$_P_EC2_STATE" != "stopped" || "$_P_RDS_STATE" != "stopped" ]]; then
-      printf '  EC2 (%s) / RDS (%s) still running \xe2\x80\x94 stop them too? [y/N] ' "$_P_EC2_STATE" "$_P_RDS_STATE"
+    if [[ "$_P_EC2_STATE" != "stopped" ]]; then
+      printf '  EC2 (%s) still running — stop it too? [y/N] ' "$_P_EC2_STATE"
       read -r _STOP_TOO
       if [[ "$_STOP_TOO" =~ ^[Yy]$ ]]; then
         [[ -n "$_P_EC2_ID" ]] && aws ec2 stop-instances --instance-ids "$_P_EC2_ID" --no-cli-pager >/dev/null || true
-        aws rds stop-db-instance --db-instance-identifier "${TF_VAR_name_prefix}-db" --no-cli-pager >/dev/null 2>&1 || true
-        printf '  Stop initiated.\n'
+        printf '  Stop initiated. RDS continues running.\n'
       fi
     fi
     _update_schedules "DISABLED"
@@ -271,7 +263,7 @@ case "${_PRE_ACTION:-}" in
       printf '  Schedule is already ENABLED \xe2\x80\x94 nothing to do.\n'; exit 0
     fi
     _update_schedules "ENABLED"
-    printf '  Schedule resumed \xe2\x80\x94 EC2 + RDS will start at next 8 am weekday run.\n'
+    printf '  Schedule resumed \xe2\x80\x94 EC2 will start at next 8 am weekday run. RDS runs 24/7.\n'
     exit 0
     ;;
 esac
