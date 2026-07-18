@@ -77,6 +77,8 @@ EC2 auto-stops on a weekday schedule managed by EventBridge Scheduler. **RDS run
 
 ## Live Service
 
+> **Schedule:** EC2 runs weekdays 8 am – 5 pm PT (EventBridge auto-start/stop). Outside those hours the app is offline and shows a maintenance page.
+
 | | URL |
 |---|---|
 | **Dashboard** | https://df9jh7fbcc9nk.cloudfront.net |

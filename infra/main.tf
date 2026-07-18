@@ -220,8 +220,9 @@ resource "aws_instance" "app" {
     #!/bin/bash
     set -e
     curl -fsSL https://rpm.nodesource.com/setup_22.x | bash -
-    dnf install -y nodejs postgresql${var.engine_version} awscli rsync nginx
+    dnf install -y nodejs postgresql${var.engine_version} awscli rsync nginx amazon-ssm-agent
     systemctl enable nginx
+    systemctl enable amazon-ssm-agent
     npm install -g pm2
     mkdir -p /app
     chown ec2-user:ec2-user /app
@@ -279,9 +280,28 @@ resource "aws_iam_role_policy" "scheduler" {
         Effect   = "Allow"
         Action   = ["ec2:StartInstances", "ec2:StopInstances"]
         Resource = aws_instance.app.arn
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["rds:StartDBInstance", "rds:StopDBInstance"]
+        Resource = aws_db_instance.pg.arn
       }
     ]
   })
+}
+
+# RDS starts 5 min before EC2 so Postgres is ready when the app boots.
+resource "aws_scheduler_schedule" "start_rds" {
+  name       = "${var.name_prefix}-start-rds"
+  group_name = "default"
+  flexible_time_window { mode = "OFF" }
+  schedule_expression          = "cron(55 7 ? * MON-FRI *)"
+  schedule_expression_timezone = "America/Los_Angeles"
+  target {
+    arn      = "arn:aws:scheduler:::aws-sdk:rds:startDBInstance"
+    role_arn = aws_iam_role.scheduler.arn
+    input    = jsonencode({ DbInstanceIdentifier = aws_db_instance.pg.id })
+  }
 }
 
 resource "aws_scheduler_schedule" "start_ec2" {
@@ -310,6 +330,20 @@ resource "aws_scheduler_schedule" "stop_ec2" {
   }
 }
 
+# RDS stops 5 min after EC2 so the app drains before the DB goes down.
+resource "aws_scheduler_schedule" "stop_rds" {
+  name       = "${var.name_prefix}-stop-rds"
+  group_name = "default"
+  flexible_time_window { mode = "OFF" }
+  schedule_expression          = "cron(5 17 ? * MON-FRI *)"
+  schedule_expression_timezone = "America/Los_Angeles"
+  target {
+    arn      = "arn:aws:scheduler:::aws-sdk:rds:stopDBInstance"
+    role_arn = aws_iam_role.scheduler.arn
+    input    = jsonencode({ DbInstanceIdentifier = aws_db_instance.pg.id })
+  }
+}
+
 # Stable public IP for the app instance — without this, any stop/restart
 # (e.g. attaching an IAM instance profile, or routine AWS maintenance)
 # silently reassigns a new dynamic IP, breaking any URL/bookmark pointing at
@@ -327,6 +361,55 @@ resource "aws_eip" "app" {
 # Caching is fully disabled (TTL 0, all headers/cookies forwarded) since this
 # app is 100% dynamic (API routes + an SSE live-feed) — anything cached here
 # would serve stale data or break the live stream.
+# ── Maintenance page (S3 static site, served when EC2 is down) ────────────────
+
+resource "aws_s3_bucket" "maintenance" {
+  bucket = "${var.name_prefix}-maintenance"
+  tags   = { Name = "${var.name_prefix}-maintenance" }
+}
+
+resource "aws_s3_bucket_public_access_block" "maintenance" {
+  bucket                  = aws_s3_bucket.maintenance.id
+  block_public_acls       = false
+  block_public_policy     = false
+  ignore_public_acls      = false
+  restrict_public_buckets = false
+}
+
+resource "aws_s3_bucket_website_configuration" "maintenance" {
+  bucket = aws_s3_bucket.maintenance.id
+  index_document { suffix = "index.html" }
+  error_document { key    = "index.html" }
+}
+
+resource "aws_s3_bucket_policy" "maintenance" {
+  bucket = aws_s3_bucket.maintenance.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "PublicRead"
+      Effect    = "Allow"
+      Principal = "*"
+      Action    = ["s3:GetObject"]
+      Resource  = "${aws_s3_bucket.maintenance.arn}/*"
+    }]
+  })
+  depends_on = [aws_s3_bucket_public_access_block.maintenance]
+}
+
+resource "aws_s3_object" "maintenance_html" {
+  bucket       = aws_s3_bucket.maintenance.id
+  key          = "index.html"
+  source       = "${path.module}/maintenance.html"
+  content_type = "text/html"
+  etag         = filemd5("${path.module}/maintenance.html")
+}
+
+# ── CloudFront: EC2 primary + S3 maintenance failover ─────────────────────────
+# CloudFront's own *.cloudfront.net cert covers TLS for free. EC2/Nginx stays
+# plain HTTP as the origin. Caching is fully disabled (TTL 0, all
+# headers/cookies forwarded) since the app is 100% dynamic (API routes + SSE).
+
 resource "aws_cloudfront_distribution" "app" {
   enabled = true
   comment = "${var.name_prefix} dashboard - HTTPS via CloudFront's default cert"
@@ -348,10 +431,33 @@ resource "aws_cloudfront_distribution" "app" {
     }
   }
 
+  origin {
+    domain_name = aws_s3_bucket_website_configuration.maintenance.website_endpoint
+    origin_id   = "maintenance-origin"
+
+    custom_origin_config {
+      http_port              = 80
+      https_port             = 443
+      origin_protocol_policy = "http-only"
+      origin_ssl_protocols   = ["TLSv1.2"]
+    }
+  }
+
+  origin_group {
+    origin_id = "app-with-maintenance"
+
+    failover_criteria {
+      status_codes = [502, 503, 504]
+    }
+
+    member { origin_id = "app-origin" }
+    member { origin_id = "maintenance-origin" }
+  }
+
   default_cache_behavior {
     allowed_methods        = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
     cached_methods         = ["GET", "HEAD"]
-    target_origin_id       = "app-origin"
+    target_origin_id       = "app-with-maintenance"
     viewer_protocol_policy = "redirect-to-https"
     min_ttl                = 0
     default_ttl            = 0
@@ -377,4 +483,99 @@ resource "aws_cloudfront_distribution" "app" {
   }
 
   tags = { Name = "${var.name_prefix}-cdn" }
+}
+
+data "aws_region" "current" {}
+data "aws_caller_identity" "current" {}
+
+# ── SSM: auto-start app when EC2 comes up ─────────────────────────────────────
+
+resource "aws_iam_role_policy_attachment" "app_ssm_core" {
+  role       = aws_iam_role.app.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+resource "aws_ssm_parameter" "database_url" {
+  name  = "/${var.name_prefix}/database-url"
+  type  = "SecureString"
+  value = "placeholder"
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
+
+resource "aws_iam_role_policy" "app_ssm_param" {
+  name = "${var.name_prefix}-app-ssm-param"
+  role = aws_iam_role.app.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["ssm:GetParameter"]
+      Resource = aws_ssm_parameter.database_url.arn
+    }]
+  })
+}
+
+resource "aws_iam_role" "eventbridge_ssm" {
+  name = "${var.name_prefix}-eventbridge-ssm"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "events.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "eventbridge_ssm" {
+  name = "${var.name_prefix}-eventbridge-ssm"
+  role = aws_iam_role.eventbridge_ssm.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = "ssm:SendCommand"
+      Resource = [
+        "arn:aws:ssm:${data.aws_region.current.name}::document/AWS-RunShellScript",
+        aws_instance.app.arn
+      ]
+    }]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "app_start" {
+  name        = "${var.name_prefix}-app-start"
+  description = "Start pm2 app via SSM when EC2 enters running state"
+
+  event_pattern = jsonencode({
+    source      = ["aws.ec2"]
+    "detail-type" = ["EC2 Instance State-change Notification"]
+    detail = {
+      state        = ["running"]
+      "instance-id" = [aws_instance.app.id]
+    }
+  })
+}
+
+resource "aws_cloudwatch_event_target" "app_start_ssm" {
+  rule     = aws_cloudwatch_event_rule.app_start.name
+  arn      = "arn:aws:ssm:${data.aws_region.current.name}::document/AWS-RunShellScript"
+  role_arn = aws_iam_role.eventbridge_ssm.arn
+
+  run_command_targets {
+    key    = "InstanceIds"
+    values = [aws_instance.app.id]
+  }
+
+  input = jsonencode({
+    commands         = ["/app/scripts/app-startup.sh"]
+    workingDirectory = ["/"]
+    executionTimeout = ["120"]
+  })
 }
