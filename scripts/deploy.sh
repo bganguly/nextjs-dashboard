@@ -120,8 +120,10 @@ rm -f "$TMPZIP"
 
 BUILD_ID="$(aws codebuild start-build \
   --project-name "$CB_PROJECT" \
-  --query 'build.id' \
-  --output text)"
+  --environment-variables-override \
+    name=CLICKHOUSE_URL,value="$CLICKHOUSE_URL",type=PLAINTEXT \
+    name=CLICKHOUSE_PASSWORD,value="${CLICKHOUSE_PASSWORD:-}",type=PLAINTEXT \
+  --query 'build.id' --output text)"
 printf '  Build %s started...\n' "$BUILD_ID"
 
 while true; do
