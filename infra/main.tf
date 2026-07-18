@@ -251,8 +251,25 @@ resource "aws_cloudfront_distribution" "app" {
     member { origin_id = "maintenance-origin" }
   }
 
-  default_cache_behavior {
+  ordered_cache_behavior {
+    path_pattern           = "/api/*"
     allowed_methods        = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
+    cached_methods         = ["GET", "HEAD"]
+    target_origin_id       = "app-origin"
+    viewer_protocol_policy = "redirect-to-https"
+    min_ttl                = 0
+    default_ttl            = 0
+    max_ttl                = 0
+
+    forwarded_values {
+      query_string = true
+      headers      = ["*"]
+      cookies { forward = "all" }
+    }
+  }
+
+  default_cache_behavior {
+    allowed_methods        = ["GET", "HEAD", "OPTIONS"]
     cached_methods         = ["GET", "HEAD"]
     target_origin_id       = "app-with-maintenance"
     viewer_protocol_policy = "redirect-to-https"
