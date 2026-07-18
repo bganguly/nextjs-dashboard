@@ -3,21 +3,85 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INFRA_DIR="$ROOT_DIR/infra"
+PROJECT_NAME="$(basename "$ROOT_DIR")"
 
 STARTUP_ONLY=0
 [[ "${1:-}" == "--startup" ]] && STARTUP_ONLY=1
 
 if [[ "$STARTUP_ONLY" == "1" ]]; then
   cd /app
-  pm2 start npm --name dashboard -- start 2>/dev/null || pm2 restart dashboard
+  pm2 delete dashboard 2>/dev/null || true
+  pm2 start npm --name dashboard -- start
   exit 0
 fi
 
-printf '\n=== clickhouse-dashboard deploy ===\n\n'
+printf '\n=== %s deploy ===\n\n' "$PROJECT_NAME"
 
-if [[ -z "${CLICKHOUSE_CLOUD_KEY:-}" ]]; then
-  printf 'ERROR: CLICKHOUSE_CLOUD_KEY env var is required.\n'
-  exit 1
+CREDS_FILE="$ROOT_DIR/.clickhouse-creds"
+
+_prompt_creds() {
+  printf 'Do you have an existing ClickHouse Cloud service? [Y/n]: '
+  read -r HAS_SVC
+  HAS_SVC="${HAS_SVC:-Y}"
+  if [[ "$HAS_SVC" =~ ^[Yy] ]]; then
+    USE_CH_API=0
+    printf 'ClickHouse hostname (e.g. abc123.us-east-1.aws.clickhouse.cloud): '
+    read -r CH_HOSTNAME
+    printf 'ClickHouse password: '
+    read -rs CLICKHOUSE_PASSWORD
+    printf '\n'
+    export CLICKHOUSE_URL="https://${CH_HOSTNAME}:8443"
+    export CLICKHOUSE_USER="${CLICKHOUSE_USER:-default}"
+    export CLICKHOUSE_PASSWORD
+  else
+    USE_CH_API=1
+    printf 'ClickHouse Cloud API key (key-id:key-secret): '
+    read -rs CLICKHOUSE_CLOUD_KEY
+    printf '\n'
+    export CLICKHOUSE_CLOUD_KEY
+  fi
+  printf 'Save credentials for future deploys? [Y/n]: '
+  read -r SAVE_CREDS
+  SAVE_CREDS="${SAVE_CREDS:-Y}"
+  if [[ "$SAVE_CREDS" =~ ^[Yy] ]]; then
+    if [[ "$USE_CH_API" == "1" ]]; then
+      printf 'CLICKHOUSE_CLOUD_KEY=%s\n' "$CLICKHOUSE_CLOUD_KEY" > "$CREDS_FILE"
+    else
+      printf 'CLICKHOUSE_URL=%s\nCLICKHOUSE_USER=%s\nCLICKHOUSE_PASSWORD=%s\n' \
+        "$CLICKHOUSE_URL" "${CLICKHOUSE_USER:-default}" "$CLICKHOUSE_PASSWORD" > "$CREDS_FILE"
+    fi
+    chmod 600 "$CREDS_FILE"
+    printf '  Saved to .clickhouse-creds\n\n'
+  fi
+}
+
+USE_CH_API=0
+
+if [[ -n "${CLICKHOUSE_CLOUD_KEY:-}" ]]; then
+  USE_CH_API=1
+  printf 'Using CLICKHOUSE_CLOUD_KEY from environment.\n\n'
+elif [[ -n "${CLICKHOUSE_URL:-}" && -n "${CLICKHOUSE_PASSWORD:-}" ]]; then
+  USE_CH_API=0
+  printf 'Using CLICKHOUSE_URL from environment: %s\n\n' "$CLICKHOUSE_URL"
+elif [[ -f "$CREDS_FILE" ]]; then
+  source "$CREDS_FILE"
+  if [[ -n "${CLICKHOUSE_CLOUD_KEY:-}" ]]; then
+    USE_CH_API=1
+    printf 'Loaded API key from .clickhouse-creds. Use it? [Y/n]: '
+  else
+    USE_CH_API=0
+    printf 'Loaded saved endpoint: %s. Use it? [Y/n]: ' "${CLICKHOUSE_URL:-}"
+  fi
+  read -r USE_SAVED
+  USE_SAVED="${USE_SAVED:-Y}"
+  if [[ ! "$USE_SAVED" =~ ^[Yy] ]]; then
+    unset CLICKHOUSE_CLOUD_KEY CLICKHOUSE_URL CLICKHOUSE_PASSWORD
+    _prompt_creds
+  else
+    printf '\n'
+  fi
+else
+  _prompt_creds
 fi
 
 for dep in aws terraform ssh rsync; do
@@ -42,28 +106,29 @@ EC2_IP="$(terraform output -raw ec2_public_ip)"
 CDN_URL="$(terraform output -raw cdn_url 2>/dev/null || true)"
 printf '  EC2 ready: %s\n' "$EC2_IP"
 
-printf '[3/4] Ensuring ClickHouse Cloud service is running...\n'
+if [[ "$USE_CH_API" == "1" ]]; then
+  printf '[3/4] Ensuring ClickHouse Cloud service is running...\n'
 
-CH_ORG_ID="${CLICKHOUSE_ORG_ID:-}"
-CH_SERVICE_NAME="${CLICKHOUSE_SERVICE_NAME:-clickhouse-dashboard}"
-CH_REGION="${CLICKHOUSE_CLOUD_REGION:-aws-us-east-1}"
-CH_TIER="${CLICKHOUSE_CLOUD_TIER:-development}"
+  CH_ORG_ID="${CLICKHOUSE_ORG_ID:-}"
+  CH_SERVICE_NAME="${CLICKHOUSE_SERVICE_NAME:-$PROJECT_NAME}"
+  CH_REGION="${CLICKHOUSE_CLOUD_REGION:-aws-us-east-1}"
+  CH_TIER="${CLICKHOUSE_CLOUD_TIER:-development}"
 
-_ch_api() {
-  local method="$1" path="$2"
-  shift 2
-  curl -fsSL -X "$method" \
-    -H "Authorization: Basic $(printf '%s' "$CLICKHOUSE_CLOUD_KEY" | base64)" \
-    -H "Content-Type: application/json" \
-    "https://api.clickhouse.cloud/v1${path}" "$@"
-}
+  _ch_api() {
+    local method="$1" path="$2"
+    shift 2
+    curl -fsSL -X "$method" \
+      -H "Authorization: Basic $(printf '%s' "$CLICKHOUSE_CLOUD_KEY" | base64)" \
+      -H "Content-Type: application/json" \
+      "https://api.clickhouse.cloud/v1${path}" "$@"
+  }
 
-if [[ -z "$CH_ORG_ID" ]]; then
-  CH_ORG_ID="$(_ch_api GET /organizations | python3 -c "import sys,json;orgs=json.load(sys.stdin).get('result',[]); print(orgs[0]['id'] if orgs else '')" 2>/dev/null || true)"
-fi
-[[ -z "$CH_ORG_ID" ]] && { printf 'ERROR: could not determine ClickHouse org ID. Set CLICKHOUSE_ORG_ID.\n'; exit 1; }
+  if [[ -z "$CH_ORG_ID" ]]; then
+    CH_ORG_ID="$(_ch_api GET /organizations | python3 -c "import sys,json;orgs=json.load(sys.stdin).get('result',[]); print(orgs[0]['id'] if orgs else '')" 2>/dev/null || true)"
+  fi
+  [[ -z "$CH_ORG_ID" ]] && { printf 'ERROR: could not determine ClickHouse org ID. Set CLICKHOUSE_ORG_ID.\n'; exit 1; }
 
-EXISTING_SERVICE="$(_ch_api GET "/organizations/${CH_ORG_ID}/services" | python3 -c "
+  EXISTING_SERVICE="$(_ch_api GET "/organizations/${CH_ORG_ID}/services" | python3 -c "
 import sys,json
 data=json.load(sys.stdin)
 for s in data.get('result',[]):
@@ -72,34 +137,37 @@ for s in data.get('result',[]):
         break
 " 2>/dev/null || true)"
 
-if [[ -z "$EXISTING_SERVICE" ]]; then
-  printf '  Creating new ClickHouse Cloud service (%s / %s)...\n' "$CH_TIER" "$CH_REGION"
-  CREATED="$(_ch_api POST "/organizations/${CH_ORG_ID}/services" \
-    -d "{\"name\":\"${CH_SERVICE_NAME}\",\"provider\":\"aws\",\"region\":\"${CH_REGION}\",\"tier\":\"${CH_TIER}\"}")"
-  CH_HOST="$(printf '%s' "$CREATED" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['result']['endpoints'][0]['hostname'])" 2>/dev/null || true)"
-  CH_PASS="$(printf '%s' "$CREATED" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['result']['password'])" 2>/dev/null || true)"
-  CH_SERVICE_ID="$(printf '%s' "$CREATED" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['result']['id'])" 2>/dev/null || true)"
-else
-  CH_HOST="$(printf '%s' "$EXISTING_SERVICE" | python3 -c "import sys,json;d=json.load(sys.stdin);ep=d.get('endpoints',[]); print(ep[0]['hostname'] if ep else '')" 2>/dev/null || true)"
-  CH_SERVICE_ID="$(printf '%s' "$EXISTING_SERVICE" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('id',''))" 2>/dev/null || true)"
-  CH_STATE="$(printf '%s' "$EXISTING_SERVICE" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('state',''))" 2>/dev/null || true)"
-  CH_PASS="${CLICKHOUSE_PASSWORD:-}"
-
-  if [[ "$CH_STATE" == "idle" || "$CH_STATE" == "stopped" ]]; then
-    printf '  Resuming paused service %s...\n' "$CH_SERVICE_ID"
-    _ch_api PATCH "/organizations/${CH_ORG_ID}/services/${CH_SERVICE_ID}/state" \
-      -d '{"command":"start"}' >/dev/null
-    printf '  Resume command sent (service starts in background).\n'
+  if [[ -z "$EXISTING_SERVICE" ]]; then
+    printf '  Creating new ClickHouse Cloud service (%s / %s)...\n' "$CH_TIER" "$CH_REGION"
+    CREATED="$(_ch_api POST "/organizations/${CH_ORG_ID}/services" \
+      -d "{\"name\":\"${CH_SERVICE_NAME}\",\"provider\":\"aws\",\"region\":\"${CH_REGION}\",\"tier\":\"${CH_TIER}\"}")"
+    CH_HOST="$(printf '%s' "$CREATED" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['result']['endpoints'][0]['hostname'])" 2>/dev/null || true)"
+    CH_PASS="$(printf '%s' "$CREATED" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['result']['password'])" 2>/dev/null || true)"
   else
-    printf '  Service state: %s\n' "$CH_STATE"
+    CH_HOST="$(printf '%s' "$EXISTING_SERVICE" | python3 -c "import sys,json;d=json.load(sys.stdin);ep=d.get('endpoints',[]); print(ep[0]['hostname'] if ep else '')" 2>/dev/null || true)"
+    CH_SERVICE_ID="$(printf '%s' "$EXISTING_SERVICE" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('id',''))" 2>/dev/null || true)"
+    CH_STATE="$(printf '%s' "$EXISTING_SERVICE" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('state',''))" 2>/dev/null || true)"
+    CH_PASS="${CLICKHOUSE_PASSWORD:-}"
+
+    if [[ "$CH_STATE" == "idle" || "$CH_STATE" == "stopped" ]]; then
+      printf '  Resuming paused service %s...\n' "$CH_SERVICE_ID"
+      _ch_api PATCH "/organizations/${CH_ORG_ID}/services/${CH_SERVICE_ID}/state" \
+        -d '{"command":"start"}' >/dev/null
+      printf '  Resume command sent (service starts in background).\n'
+    else
+      printf '  Service state: %s\n' "$CH_STATE"
+    fi
   fi
+
+  [[ -z "$CH_HOST" ]] && { printf 'ERROR: could not determine ClickHouse host.\n'; exit 1; }
+  [[ -z "$CH_PASS" ]] && { printf 'ERROR: CLICKHOUSE_PASSWORD is required for an existing service.\n'; exit 1; }
+  CLICKHOUSE_URL="https://${CH_HOST}:8443"
+  printf '  ClickHouse endpoint: %s\n' "$CLICKHOUSE_URL"
+else
+  printf '[3/4] Using provided CLICKHOUSE_URL (skipping CH Cloud API).\n'
+  CH_PASS="${CLICKHOUSE_PASSWORD}"
+  printf '  ClickHouse endpoint: %s\n' "$CLICKHOUSE_URL"
 fi
-
-[[ -z "$CH_HOST" ]] && { printf 'ERROR: could not determine ClickHouse host.\n'; exit 1; }
-[[ -z "$CH_PASS" ]] && { printf 'ERROR: CLICKHOUSE_PASSWORD is required for an existing service.\n'; exit 1; }
-
-CLICKHOUSE_URL="https://${CH_HOST}:8443"
-printf '  ClickHouse endpoint: %s\n' "$CLICKHOUSE_URL"
 
 printf '[4/4] Deploying app to EC2...\n'
 
@@ -160,9 +228,8 @@ ENV
   export NEXT_PUBLIC_DEMO_SCALE='${DEMO_SCALE}'
   npm run build
 
-  cat > /etc/systemd/system/dashboard.env.placeholder <<ENV 2>/dev/null || true
-ENV
-  pm2 start npm --name dashboard -- start 2>/dev/null || pm2 restart dashboard
+  pm2 delete dashboard 2>/dev/null || true
+  pm2 start npm --name dashboard -- start
 
   sudo env PATH=\$PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd -u ec2-user --hp /home/ec2-user 2>/dev/null || true
   pm2 save
@@ -194,4 +261,29 @@ BASE_URL="${CDN_URL:-http://${EC2_IP}}"
 printf '\n  Dashboard live at:  %s\n' "$BASE_URL"
 printf '  API Explorer:       %s/api-explorer\n' "$BASE_URL"
 printf '  SSH:                ssh -i %s ec2-user@%s\n' "$SSH_PRIVATE_KEY" "$EC2_IP"
-printf '  Tear down:          ./scripts/infra-down.sh\n\n'
+printf '  Tear down:          %s/scripts/infra-down.sh\n\n' "$ROOT_DIR"
+
+if [[ -f "$ROOT_DIR/README.md" ]]; then
+  python3 - "$BASE_URL" "$ROOT_DIR/README.md" <<'PYEOF'
+import re, sys
+url, path = sys.argv[1], sys.argv[2]
+content = open(path).read()
+content = re.sub(r'(\| \*\*Dashboard\*\* \| )(https?://\S+)( \|)', r'\g<1>' + url + r'\g<3>', content)
+content = re.sub(r'(\| \*\*API Explorer\*\* \| )(https?://\S+)( \|)', r'\g<1>' + url + '/api-explorer' + r'\g<3>', content)
+open(path, 'w').write(content)
+PYEOF
+  git -C "$ROOT_DIR" add README.md
+  if ! git -C "$ROOT_DIR" diff --cached --quiet; then
+    git -C "$ROOT_DIR" commit -m "deploy: update live URL → ${BASE_URL}"
+    git -C "$ROOT_DIR" push origin HEAD:main
+    printf '  README updated and pushed.\n'
+  fi
+fi
+
+PORTFOLIO_SCRIPT="$ROOT_DIR/../../portfolio/scripts/set-live-url.sh"
+if [[ -x "$PORTFOLIO_SCRIPT" ]]; then
+  printf 'Updating portfolio live URL...\n'
+  bash "$PORTFOLIO_SCRIPT" nextjs "$BASE_URL"
+else
+  printf 'Portfolio script not found at %s — skipping.\n' "$PORTFOLIO_SCRIPT"
+fi
