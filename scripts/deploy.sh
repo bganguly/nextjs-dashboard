@@ -224,7 +224,7 @@ ENV
 
   command -v nginx >/dev/null 2>&1 || sudo dnf install -y nginx
 
-  npm ci --prefer-offline
+  npm ci --prefer-offline 2>/dev/null || npm install
 
   node -e "
     const { runMigrations } = require('./lib/schema.js');
