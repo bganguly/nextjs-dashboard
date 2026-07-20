@@ -1,4 +1,4 @@
-import { Pool } from "pg";
+import { Pool, QueryResultRow } from "pg";
 
 const globalForPg = globalThis as unknown as { pgPool: Pool };
 
@@ -8,7 +8,7 @@ export const pool: Pool =
 
 if (process.env.NODE_ENV !== "production") globalForPg.pgPool = pool;
 
-export async function query<T = Record<string, unknown>>(
+export async function query<T extends QueryResultRow = Record<string, any>>(
   sql: string,
   params?: unknown[],
 ): Promise<T[]> {
