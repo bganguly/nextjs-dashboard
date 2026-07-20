@@ -80,9 +80,29 @@ printf '[1/4] Checking AWS credentials...\n'
 aws sts get-caller-identity >/dev/null
 printf '  OK\n'
 
+_GH_REPO="$(git -C "$ROOT_DIR" remote get-url origin 2>/dev/null \
+  | sed 's|.*github\.com[:/]\(.*\)\.git$|\1|; s|.*github\.com[:/]\(.*\)$|\1|')"
+
 printf '[2/4] Provisioning ECR (terraform apply)...\n'
 cd "$INFRA_DIR"
 terraform init -input=false -upgrade >/dev/null
+printf '  Pruning stale state...\n'
+
+terraform state rm aws_codebuild_project.app         2>/dev/null || true
+terraform state rm aws_iam_role_policy.codebuild     2>/dev/null || true
+terraform state rm aws_iam_role.codebuild            2>/dev/null || true
+terraform state rm aws_s3_bucket.codebuild_src       2>/dev/null || true
+
+_STATE_FILE="$INFRA_DIR/terraform.tfstate"
+if [[ -f "$_STATE_FILE" ]]; then
+  python3 -c "
+import json
+with open('$_STATE_FILE') as f: s = json.load(f)
+for k in ('codebuild_source_bucket', 'codebuild_project_name'):
+    s.get('outputs', {}).pop(k, None)
+with open('$_STATE_FILE', 'w') as f: json.dump(s, f, indent=2)
+" 2>/dev/null || true
+fi
 
 ECR_IMAGE_EXISTS="$(aws ecr describe-images \
   --repository-name "${TF_VAR_name_prefix:-njs-dash}-app" \
@@ -91,7 +111,7 @@ ECR_IMAGE_EXISTS="$(aws ecr describe-images \
   --output text 2>/dev/null || true)"
 
 if [[ -z "$ECR_IMAGE_EXISTS" || "$ECR_IMAGE_EXISTS" == "None" ]]; then
-  printf '  First deploy â provisioning ECR only (App Runner needs an image first).\n'
+  printf '  First deploy — provisioning ECR only (App Runner needs an image first).\n'
   terraform apply -auto-approve -input=false \
     -target=aws_ecr_repository.app \
     -target=aws_ecr_lifecycle_policy.app \
@@ -109,24 +129,54 @@ else
   FIRST_DEPLOY=0
 fi
 
+printf '  Reading Terraform outputs...\n'
 ECR_REPO="$(terraform output -raw ecr_repository_url)"
 
 printf '[3/4] Verifying ECR image exists...\n'
-ECR_TAG_CHECK="$(aws ecr describe-images \
-  --repository-name "${TF_VAR_name_prefix:-njs-dash}-app" \
-  --image-ids imageTag=latest \
-  --query 'imageDetails[0].imageDigest' \
-  --output text 2>/dev/null || true)"
-if [[ -z "$ECR_TAG_CHECK" || "$ECR_TAG_CHECK" == "None" ]]; then
-  printf 'ERROR: No image found in ECR. Push to main to trigger GitHub Actions, then re-run deploy.sh.\n'
-  exit 1
-fi
-printf '  Image found.\n'
+_REMOTE_SHA="$(git -C "$ROOT_DIR" ls-remote origin HEAD 2>/dev/null | cut -c1-7)"
+_DEPLOY_TAG="${_REMOTE_SHA:-$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || echo "latest")}"
 
+_ecr_image_exists() {
+  aws ecr describe-images \
+    --repository-name "${TF_VAR_name_prefix:-njs-dash}-app" \
+    --image-ids "imageTag=$1" >/dev/null 2>&1
+}
+
+printf '  Checking ECR for image %s...\n' "$_DEPLOY_TAG"
+if ! _ecr_image_exists "$_DEPLOY_TAG"; then
+  if _ecr_image_exists "latest"; then
+    printf '  SHA %s not in ECR (image unchanged) — using latest.\n' "$_DEPLOY_TAG"
+    _DEPLOY_TAG=latest
+  else
+    printf '  No image in ECR yet — waiting for GitHub Actions build (up to 10 min)...\n'
+    _ecr_elapsed=0
+    until _ecr_image_exists "latest"; do
+      if (( _ecr_elapsed >= 600 )); then
+        printf '  Timed out. Check Actions: https://github.com/%s/actions\n' "$_GH_REPO"
+        exit 1
+      fi
+      sleep 15; _ecr_elapsed=$(( _ecr_elapsed + 15 ))
+      printf '  ...%ds\n' "$_ecr_elapsed"
+    done
+    _DEPLOY_TAG=latest
+  fi
+fi
+printf '  Image %s found in ECR.\n' "$_DEPLOY_TAG"
+if [[ "$_DEPLOY_TAG" != "latest" ]]; then
+  _MANIFEST="$(aws ecr batch-get-image \
+    --repository-name "${TF_VAR_name_prefix:-njs-dash}-app" \
+    --image-ids "imageTag=${_DEPLOY_TAG}" \
+    --query 'images[0].imageManifest' --output text 2>/dev/null)"
+  aws ecr put-image \
+    --repository-name "${TF_VAR_name_prefix:-njs-dash}-app" \
+    --image-tag latest --image-manifest "$_MANIFEST" >/dev/null 2>&1 \
+    && printf '  Re-tagged %s as latest.\n' "$_DEPLOY_TAG" || true
+fi
 
 printf '[4/4] Completing infrastructure (terraform apply)...\n'
 cd "$INFRA_DIR"
 terraform apply -auto-approve -input=false
+printf '  Reading Terraform outputs...\n'
 
 APP_RUNNER_ARN="$(terraform output -raw apprunner_service_arn)"
 CDN_URL="$(terraform output -raw cdn_url)"
