@@ -82,6 +82,13 @@ printf '  OK\n'
 
 _GH_REPO="$(git -C "$ROOT_DIR" remote get-url origin 2>/dev/null \
   | sed 's|.*github\.com[:/]\(.*\)\.git$|\1|; s|.*github\.com[:/]\(.*\)$|\1|')"
+if command -v gh >/dev/null 2>&1 && [[ -n "$_GH_REPO" ]]; then
+  printf '  Syncing AWS credentials to GitHub Actions secrets (%s)...\n' "$_GH_REPO"
+  _AWS_REGION="$(aws configure get region 2>/dev/null || echo "us-east-1")"
+  aws configure get aws_access_key_id     | gh secret set AWS_ACCESS_KEY_ID     --repo "$_GH_REPO"
+  aws configure get aws_secret_access_key | gh secret set AWS_SECRET_ACCESS_KEY --repo "$_GH_REPO"
+  printf '%s' "$_AWS_REGION"              | gh secret set AWS_REGION            --repo "$_GH_REPO"
+fi
 
 printf '[2/4] Provisioning ECR (terraform apply)...\n'
 cd "$INFRA_DIR"
@@ -180,6 +187,11 @@ printf '  Reading Terraform outputs...\n'
 
 APP_RUNNER_ARN="$(terraform output -raw apprunner_service_arn)"
 CDN_URL="$(terraform output -raw cdn_url)"
+CF_DIST_ID="$(terraform output -raw cf_distribution_id 2>/dev/null || true)"
+if command -v gh >/dev/null 2>&1 && [[ -n "$_GH_REPO" && -n "$CF_DIST_ID" ]]; then
+  printf '%s' "$CF_DIST_ID" | gh secret set CF_DISTRIBUTION_ID --repo "$_GH_REPO"
+  printf '  Synced CF_DISTRIBUTION_ID to GitHub Actions secrets.\n'
+fi
 
 if [[ "$FIRST_DEPLOY" == "0" ]]; then
   printf '[4/4] Deploying new image to App Runner...\n'

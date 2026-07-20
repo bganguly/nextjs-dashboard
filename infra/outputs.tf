@@ -17,3 +17,8 @@ output "cdn_url" {
   description = "HTTPS URL via CloudFront"
   value       = "https://${aws_cloudfront_distribution.app.domain_name}"
 }
+
+output "cf_distribution_id" {
+  description = "CloudFront distribution ID"
+  value       = aws_cloudfront_distribution.app.id
+}
