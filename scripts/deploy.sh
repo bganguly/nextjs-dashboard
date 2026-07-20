@@ -99,10 +99,6 @@ if [[ -z "$ECR_IMAGE_EXISTS" || "$ECR_IMAGE_EXISTS" == "None" ]]; then
     -target=aws_s3_bucket_policy.maintenance \
     -target=aws_s3_object.maintenance_html
   FIRST_DEPLOY=1
-  if command -v gh >/dev/null 2>&1 && [[ -n "$_GH_REPO" ]]; then
-    printf '  Dispatching GitHub Actions build (ECR now ready)...\n'
-    gh workflow run deploy.yml --repo "$_GH_REPO" 2>/dev/null || true
-  fi
 else
   terraform apply -auto-approve -input=false
   FIRST_DEPLOY=0

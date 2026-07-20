@@ -26,10 +26,11 @@ jobs:
       - name: Build and push Docker image
         env:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          TF_VAR_name_prefix: ${{ vars.TF_VAR_name_prefix }}
+          REPO: ${{ vars.TF_VAR_name_prefix || 'njs-dash' }}-app
+          TAG: ${{ github.sha }}
         run: |
-          IMAGE="${REGISTRY}/${TF_VAR_name_prefix:-njs-dash}-app"
-          SHORT_SHA="${GITHUB_SHA::7}"
-          docker build -t "${IMAGE}:latest" -t "${IMAGE}:${SHORT_SHA}" .
-          docker push "${IMAGE}:latest"
-          docker push "${IMAGE}:${SHORT_SHA}"
+          SHORT_SHA="${TAG::7}"
+          docker build --platform linux/amd64 -t "$REGISTRY/$REPO:$SHORT_SHA" .
+          docker tag "$REGISTRY/$REPO:$SHORT_SHA" "$REGISTRY/$REPO:latest"
+          docker push "$REGISTRY/$REPO:$SHORT_SHA"
+          docker push "$REGISTRY/$REPO:latest"
