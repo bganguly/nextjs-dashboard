@@ -99,6 +99,10 @@ if [[ -z "$ECR_IMAGE_EXISTS" || "$ECR_IMAGE_EXISTS" == "None" ]]; then
     -target=aws_s3_bucket_policy.maintenance \
     -target=aws_s3_object.maintenance_html
   FIRST_DEPLOY=1
+  if command -v gh >/dev/null 2>&1 && [[ -n "$_GH_REPO" ]]; then
+    printf '  Dispatching GitHub Actions build (ECR now ready)...\n'
+    gh workflow run deploy.yml --repo "$_GH_REPO" 2>/dev/null || true
+  fi
 else
   terraform apply -auto-approve -input=false
   FIRST_DEPLOY=0
@@ -150,6 +154,15 @@ fi
 
 printf '[4/4] Completing infrastructure (terraform apply)...\n'
 cd "$INFRA_DIR"
+_AR_ARN_PRE="$(terraform output -raw apprunner_service_arn 2>/dev/null || true)"
+if [[ -n "$_AR_ARN_PRE" ]]; then
+  _AR_STATUS_PRE="$(aws apprunner describe-service --service-arn "$_AR_ARN_PRE" \
+    --query 'Service.Status' --output text 2>/dev/null || true)"
+  if [[ "$_AR_STATUS_PRE" == "CREATE_FAILED" ]]; then
+    printf '  App Runner in CREATE_FAILED — tainting for recreation...\n'
+    terraform taint aws_apprunner_service.app
+  fi
+fi
 terraform apply -auto-approve -input=false
 printf '  Reading Terraform outputs...\n'
 
