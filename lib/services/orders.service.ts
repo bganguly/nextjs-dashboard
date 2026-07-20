@@ -1,4 +1,4 @@
-import { query, insert } from "@/lib/clickhouse";
+import { query, pool } from "@/lib/db";
 import { AppError, mapDbError } from "@/lib/errors";
 import { invalidateAggregatesCache } from "@/lib/aggregates-cache";
 import { publishOrderEvent } from "./stream.service";
@@ -28,11 +28,11 @@ const ORDER_STATUSES: readonly OrderStatus[] = [
 ];
 
 const SORT_COL: Record<OrderSortField, string> = {
-  placedAt: "placedAt",
+  placedAt: "placed_at",
   total: "total",
   status: "status",
-  customer: "customerLastName",
-  id: "orderId",
+  customer: "customer_last_name",
+  id: "order_id",
 };
 
 function normalizeSort(sort: string | null | undefined): OrderSortField {
@@ -80,9 +80,8 @@ function parseDateBoundary(value: string | null | undefined, edge: "start" | "en
   if (Number.isNaN(d.getTime())) throw new AppError("BAD_REQUEST", `invalid date filter: ${value}`);
   if (edge === "end" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
     d.setUTCHours(23, 59, 59, 999);
-    return d.toISOString().replace("T", " ").replace("Z", "");
   }
-  return d.toISOString().replace("T", " ").replace("Z", "");
+  return d.toISOString();
 }
 
 export async function resolveFilters(input: OrderFilterInput): Promise<ResolvedFilters> {
@@ -102,39 +101,38 @@ export async function resolveFilters(input: OrderFilterInput): Promise<ResolvedF
 function buildWhereParts(
   searchTokens: string[],
   f: ResolvedFilters,
-): { clauses: string[]; params: Record<string, unknown> } {
+): { clauses: string[]; params: unknown[] } {
   const clauses: string[] = [];
-  const params: Record<string, unknown> = {};
-  let pi = 0;
+  const params: unknown[] = [];
+  let pi = 1;
 
   for (const tok of searchTokens) {
-    const k = `stok${pi++}`;
-    clauses.push(`positionCaseInsensitive(searchText, {${k}: String}) > 0`);
-    params[k] = escapeLike(tok);
+    clauses.push(`search_text ILIKE '%' || $${pi++} || '%'`);
+    params.push(escapeLike(tok));
   }
   if (f.statuses.length) {
-    clauses.push(`status IN ({statuses: Array(String)})`);
-    params["statuses"] = f.statuses;
+    clauses.push(`status = ANY($${pi++}::text[])`);
+    params.push(f.statuses);
   }
   if (f.regionCodes.length) {
-    clauses.push(`regionCode IN ({regionCodes: Array(String)})`);
-    params["regionCodes"] = f.regionCodes;
+    clauses.push(`region_code = ANY($${pi++}::text[])`);
+    params.push(f.regionCodes);
   }
   if (f.from) {
-    clauses.push(`placedAt >= {from: DateTime64(3)}`);
-    params["from"] = f.from;
+    clauses.push(`placed_at >= $${pi++}::timestamptz`);
+    params.push(f.from);
   }
   if (f.to) {
-    clauses.push(`placedAt <= {to: DateTime64(3)}`);
-    params["to"] = f.to;
+    clauses.push(`placed_at <= $${pi++}::timestamptz`);
+    params.push(f.to);
   }
   if (f.minTotal !== null) {
-    clauses.push(`total >= {minTotal: Float64}`);
-    params["minTotal"] = f.minTotal;
+    clauses.push(`total >= $${pi++}`);
+    params.push(f.minTotal);
   }
   if (f.maxTotal !== null) {
-    clauses.push(`total <= {maxTotal: Float64}`);
-    params["maxTotal"] = f.maxTotal;
+    clauses.push(`total <= $${pi++}`);
+    params.push(f.maxTotal);
   }
   return { clauses, params };
 }
@@ -159,10 +157,10 @@ export async function listOrders(input: OrderListInput): Promise<OrderListResult
     const { clauses, params } = buildWhereParts(tokens, filters);
     const where = whereSQL(clauses);
     const sortCol = SORT_COL[sort];
-    const orderBy = `${sortCol} ${dir.toUpperCase()}, orderId ${dir.toUpperCase()}`;
+    const orderBy = `${sortCol} ${dir.toUpperCase()}, order_id ${dir.toUpperCase()}`;
 
     const countRows = await query<{ n: string }>(
-      `SELECT count() AS n FROM orders ${where}`,
+      `SELECT count(*) AS n FROM orders ${where}`,
       params,
     );
     const rawTotal = Number(countRows[0]?.n ?? 0);
@@ -170,11 +168,13 @@ export async function listOrders(input: OrderListInput): Promise<OrderListResult
     const total = approximate ? COUNT_SENTINEL - 1 : rawTotal;
     const totalPages = total === 0 ? 0 : Math.ceil(total / pageSize);
 
-    const idRows = await query<{ orderId: string }>(
-      `SELECT orderId FROM orders ${where} ORDER BY ${orderBy} LIMIT {lim: UInt32} OFFSET {off: UInt32}`,
-      { ...params, lim: pageSize, off: offset },
+    const limN = params.length + 1;
+    const offN = params.length + 2;
+    const idRows = await query<{ order_id: string }>(
+      `SELECT order_id FROM orders ${where} ORDER BY ${orderBy} LIMIT $${limN} OFFSET $${offN}`,
+      [...params, pageSize, offset],
     );
-    const ids = idRows.map((r) => Number(r.orderId));
+    const ids = idRows.map((r) => Number(r.order_id));
     const data = await hydrateOrders(ids);
     const result: OrderListResult = { data, page, pageSize, total, totalPages, approximate };
     if (input.facets) result.facets = await computeFacets(where, params);
@@ -198,22 +198,24 @@ export async function listOrdersByCursor(
     const filters = await resolveFilters(input);
     const { clauses: baseClauses, params: baseParams } = buildWhereParts(tokens, filters);
 
-    const cursorTs = new Date(input.cursorPlacedAt)
-      .toISOString().replace("T", " ").replace("Z", "");
+    const cursorTs = new Date(input.cursorPlacedAt).toISOString();
     const isNext = input.cursorDir === "next";
+    const cTsN = baseParams.length + 1;
+    const cIdN = baseParams.length + 2;
     const cursorClause = isNext
-      ? `(placedAt, orderId) < ({cTs: DateTime64(3)}, {cId: UInt64})`
-      : `(placedAt, orderId) > ({cTs: DateTime64(3)}, {cId: UInt64})`;
+      ? `(placed_at, order_id) < ($${cTsN}::timestamptz, $${cIdN}::bigint)`
+      : `(placed_at, order_id) > ($${cTsN}::timestamptz, $${cIdN}::bigint)`;
     const allClauses = [...baseClauses, cursorClause];
-    const allParams = { ...baseParams, cTs: cursorTs, cId: input.cursorId };
+    const allParams = [...baseParams, cursorTs, input.cursorId];
     const where = whereSQL(allClauses);
     const dirSQL = isNext ? "DESC" : "ASC";
 
+    const limN = allParams.length + 1;
     const [countRows, pageRows] = await Promise.all([
-      query<{ n: string }>(`SELECT count() AS n FROM orders ${whereSQL(baseClauses)}`, baseParams),
-      query<{ orderId: string }>(
-        `SELECT orderId FROM orders ${where} ORDER BY placedAt ${dirSQL}, orderId ${dirSQL} LIMIT {lim: UInt32}`,
-        { ...allParams, lim: pageSize },
+      query<{ n: string }>(`SELECT count(*) AS n FROM orders ${whereSQL(baseClauses)}`, baseParams),
+      query<{ order_id: string }>(
+        `SELECT order_id FROM orders ${where} ORDER BY placed_at ${dirSQL}, order_id ${dirSQL} LIMIT $${limN}`,
+        [...allParams, pageSize],
       ),
     ]);
 
@@ -223,7 +225,7 @@ export async function listOrdersByCursor(
     const totalPages = total === 0 ? 0 : Math.ceil(total / pageSize);
 
     const idRows = isNext ? pageRows : pageRows.reverse();
-    const ids = idRows.map((r) => Number(r.orderId));
+    const ids = idRows.map((r) => Number(r.order_id));
     const data = await hydrateOrders(ids);
     const result: OrderListResult = { data, page, pageSize, total, totalPages, approximate };
     if (input.facets) result.facets = await computeFacets(whereSQL(baseClauses), baseParams);
@@ -235,40 +237,39 @@ export async function listOrdersByCursor(
 
 async function hydrateOrders(ids: number[]): Promise<OrderDTO[]> {
   if (ids.length === 0) return [];
-  const idList = ids.join(",");
 
   const [orderRows, itemRows] = await Promise.all([
     query<{
-      orderId: string; status: string; total: string; currency: string; notes: string | null;
-      placedAt: string; customerId: string; regionId: string; regionCode: string;
-      customerFirstName: string; customerLastName: string; customerEmail: string;
-    }>(`SELECT orderId, status, total, currency, notes, placedAt,
-              customerId, regionId, regionCode,
-              customerFirstName, customerLastName, customerEmail
-       FROM orders WHERE orderId IN (${idList})`),
+      order_id: string; status: string; total: string; currency: string; notes: string | null;
+      placed_at: Date; customer_id: string; region_id: number; region_code: string;
+      customer_first_name: string; customer_last_name: string; customer_email: string;
+    }>(`SELECT order_id, status, total, currency, notes, placed_at,
+              customer_id, region_id, region_code,
+              customer_first_name, customer_last_name, customer_email
+       FROM orders WHERE order_id = ANY($1::bigint[])`, [ids]),
     query<{
-      orderId: string; itemId: string; productId: string; productName: string;
-      productSku: string; quantity: string; unitPrice: string; discount: string;
-    }>(`SELECT orderId, itemId, productId, productName, productSku,
-              quantity, unitPrice, discount
-       FROM order_items WHERE orderId IN (${idList}) ORDER BY orderId, itemId`),
+      order_id: string; item_id: string; product_id: number; product_name: string;
+      product_sku: string; quantity: number; unit_price: string; discount: string;
+    }>(`SELECT order_id, item_id, product_id, product_name, product_sku,
+              quantity, unit_price, discount
+       FROM order_items WHERE order_id = ANY($1::bigint[]) ORDER BY order_id, item_id`, [ids]),
   ]);
 
   const itemsByOrder = new Map<number, OrderItemDTO[]>();
   for (const r of itemRows) {
-    const oid = Number(r.orderId);
+    const oid = Number(r.order_id);
     if (!itemsByOrder.has(oid)) itemsByOrder.set(oid, []);
     itemsByOrder.get(oid)!.push({
-      id: Number(r.itemId),
-      productId: Number(r.productId),
-      quantity: Number(r.quantity),
-      unitPrice: Number(r.unitPrice),
+      id: Number(r.item_id),
+      productId: r.product_id,
+      quantity: r.quantity,
+      unitPrice: Number(r.unit_price),
       discount: Number(r.discount),
-      product: { id: Number(r.productId), sku: r.productSku, name: r.productName },
+      product: { id: r.product_id, sku: r.product_sku, name: r.product_name },
     });
   }
 
-  const orderMap = new Map(orderRows.map((r) => [Number(r.orderId), r]));
+  const orderMap = new Map(orderRows.map((r) => [Number(r.order_id), r]));
   return ids.flatMap((id) => {
     const r = orderMap.get(id);
     if (!r) return [];
@@ -278,14 +279,14 @@ async function hydrateOrders(ids: number[]): Promise<OrderDTO[]> {
       total: Number(r.total),
       currency: r.currency,
       notes: r.notes,
-      placedAt: new Date(r.placedAt).toISOString(),
+      placedAt: new Date(r.placed_at).toISOString(),
       customer: {
-        id: Number(r.customerId),
-        email: r.customerEmail,
-        firstName: r.customerFirstName,
-        lastName: r.customerLastName,
+        id: Number(r.customer_id),
+        email: r.customer_email,
+        firstName: r.customer_first_name,
+        lastName: r.customer_last_name,
       },
-      region: { id: Number(r.regionId), code: r.regionCode, name: r.regionCode },
+      region: { id: r.region_id, code: r.region_code, name: r.region_code },
       items: itemsByOrder.get(id) ?? [],
     }];
   });
@@ -293,12 +294,12 @@ async function hydrateOrders(ids: number[]): Promise<OrderDTO[]> {
 
 async function computeFacets(
   where: string,
-  params: Record<string, unknown>,
+  params: unknown[],
 ): Promise<OrderFacets> {
   const rows = await query<{ dim: string; key: string; n: string }>(
-    `SELECT 'status' AS dim, status AS key, count() AS n FROM orders ${where} GROUP BY status
+    `SELECT 'status' AS dim, status AS key, count(*) AS n FROM orders ${where} GROUP BY status
      UNION ALL
-     SELECT 'region' AS dim, regionCode AS key, count() AS n FROM orders ${where} GROUP BY regionCode`,
+     SELECT 'region' AS dim, region_code AS key, count(*) AS n FROM orders ${where} GROUP BY region_code`,
     params,
   );
 
@@ -336,18 +337,19 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
 
   try {
     const [customerRows, productRows, regionRows] = await Promise.all([
-      query<{ customerId: string; firstName: string; lastName: string; email: string; regionId: string }>(
-        `SELECT customerId, firstName, lastName, email, regionId FROM customers WHERE customerId = {cid: UInt64} LIMIT 1`,
-        { cid: input.customerId },
+      query<{ customer_id: string; first_name: string; last_name: string; email: string; region_id: number }>(
+        `SELECT customer_id, first_name, last_name, email, region_id FROM customers WHERE customer_id = $1 LIMIT 1`,
+        [input.customerId],
       ),
-      query<{ productId: string; sku: string; name: string; categoryId: string; categoryName: string }>(
-        `SELECT p.productId, p.sku, p.name, p.categoryId, c.name AS categoryName
-         FROM products p JOIN categories c ON c.categoryId = p.categoryId
-         WHERE p.productId IN (${input.items.map((i) => i.productId).join(",")})`,
+      query<{ product_id: number; sku: string; name: string; category_id: number; category_name: string }>(
+        `SELECT p.product_id, p.sku, p.name, p.category_id, c.name AS category_name
+         FROM products p JOIN categories c ON c.category_id = p.category_id
+         WHERE p.product_id = ANY($1::int[])`,
+        [input.items.map((i) => i.productId)],
       ),
-      query<{ regionId: string; code: string; name: string }>(
-        `SELECT regionId, code, name FROM regions WHERE regionId = {rid: UInt32} LIMIT 1`,
-        { rid: input.regionId },
+      query<{ region_id: number; code: string; name: string }>(
+        `SELECT region_id, code, name FROM regions WHERE region_id = $1 LIMIT 1`,
+        [input.regionId],
       ),
     ]);
 
@@ -356,86 +358,63 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
     const region = regionRows[0];
     if (!region) throw new AppError("NOT_FOUND", `region ${input.regionId} not found`);
 
-    const productById = new Map(productRows.map((p) => [Number(p.productId), p]));
+    const productById = new Map(productRows.map((p) => [p.product_id, p]));
 
     const orderId = genId();
-    const placedAt = new Date().toISOString().replace("T", " ").replace("Z", "");
-    const date = placedAt.slice(0, 10);
-    const searchText = `${customer.firstName} ${customer.lastName} ${customer.email}${input.notes ? " " + input.notes : ""}`;
-
-    await insert("orders", [{
-      orderId,
-      customerId: input.customerId,
-      regionId: input.regionId,
-      regionCode: region.code,
-      customerFirstName: customer.firstName,
-      customerLastName: customer.lastName,
-      customerEmail: customer.email,
-      status: "PENDING",
-      total,
-      currency: input.currency ?? "USD",
-      notes: input.notes ?? null,
-      searchText,
-      placedAt,
-    }]);
+    const placedAt = new Date().toISOString();
+    const searchText = `${customer.first_name} ${customer.last_name} ${customer.email}${input.notes ? " " + input.notes : ""}`;
 
     const itemRows = input.items.map((it) => {
       const p = productById.get(it.productId);
       return {
-        itemId: genId(),
-        orderId,
-        productId: it.productId,
-        productName: p?.name ?? "",
-        productSku: p?.sku ?? "",
-        categoryId: p ? Number(p.categoryId) : 0,
-        categoryName: p?.categoryName ?? "",
+        item_id: genId(),
+        order_id: orderId,
+        product_id: it.productId,
+        product_name: p?.name ?? "",
+        product_sku: p?.sku ?? "",
+        category_id: p?.category_id ?? 0,
+        category_name: p?.category_name ?? "",
         quantity: it.quantity,
-        unitPrice: it.unitPrice,
+        unit_price: it.unitPrice,
         discount: it.discount ?? 0,
       };
     });
-    await insert("order_items", itemRows);
 
-    const byCategory = new Map<number, { categoryId: number; categoryName: string; totalItems: number; totalRevenue: number }>();
-    for (const it of itemRows) {
-      const rev = it.quantity * it.unitPrice * (1 - it.discount);
-      const entry = byCategory.get(it.categoryId);
-      if (entry) {
-        entry.totalItems += it.quantity;
-        entry.totalRevenue += rev;
-      } else {
-        byCategory.set(it.categoryId, { categoryId: it.categoryId, categoryName: it.categoryName, totalItems: it.quantity, totalRevenue: rev });
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `INSERT INTO orders (order_id, customer_id, region_id, region_code, customer_first_name, customer_last_name, customer_email, status, total, currency, notes, search_text, placed_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+        [orderId, input.customerId, input.regionId, region.code, customer.first_name, customer.last_name, customer.email, "PENDING", total, input.currency ?? "USD", input.notes ?? null, searchText, placedAt],
+      );
+      for (const item of itemRows) {
+        await client.query(
+          `INSERT INTO order_items (item_id, order_id, product_id, product_name, product_sku, category_id, category_name, quantity, unit_price, discount)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          [item.item_id, item.order_id, item.product_id, item.product_name, item.product_sku, item.category_id, item.category_name, item.quantity, item.unit_price, item.discount],
+        );
       }
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
     }
 
-    const factRows = Array.from(byCategory.values()).map((c) => ({
-      orderId,
-      date,
-      placedAt,
-      customerId: input.customerId,
-      regionId: input.regionId,
-      regionCode: region.code,
-      status: "PENDING",
-      orderTotal: total,
-      categoryId: c.categoryId,
-      categoryName: c.categoryName,
-      totalItems: c.totalItems,
-      totalRevenue: c.totalRevenue,
-    }));
-    await insert("order_category_facts", factRows);
-
-    const firstCategorySlug = itemRows[0]?.categoryName;
+    const firstCategorySlug = itemRows[0]?.category_name;
     publishOrderEvent({
       id: orderId,
       total,
       customerId: input.customerId,
-      placedAt: new Date(placedAt).toISOString(),
+      placedAt,
       categorySlug: firstCategorySlug,
     }).catch(() => {});
 
     invalidateAggregatesCache();
 
-    return { id: orderId, status: "PENDING", total, placedAt: new Date(placedAt).toISOString() };
+    return { id: orderId, status: "PENDING", total, placedAt };
   } catch (err) {
     mapDbError(err, "createOrder");
   }
@@ -459,7 +438,7 @@ export async function getOrderCount(
   const { clauses, params } = buildWhereParts(tokens, filters);
   const where = whereSQL(clauses);
   const rows = await query<{ n: string }>(
-    `SELECT count() AS n FROM orders ${where}`,
+    `SELECT count(*) AS n FROM orders ${where}`,
     params,
   );
   return Number(rows[0]?.n ?? 0);

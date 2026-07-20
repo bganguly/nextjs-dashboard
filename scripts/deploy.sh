@@ -20,57 +20,25 @@ case "${DEPLOY_TARGET:-2}" in
   *) printf 'Invalid choice.\n'; exit 1 ;;
 esac
 
-CREDS_FILE="$ROOT_DIR/.clickhouse-creds"
-
-_prompt_creds() {
-  printf 'ClickHouse hostname (e.g. abc123.us-east-1.aws.clickhouse.cloud): '
-  read -r CH_HOSTNAME
-  printf 'ClickHouse password: '
-  read -rs CLICKHOUSE_PASSWORD
-  printf '\n'
-  export CLICKHOUSE_URL="https://${CH_HOSTNAME}:8443"
-  export CLICKHOUSE_USER="${CLICKHOUSE_USER:-default}"
-  export CLICKHOUSE_PASSWORD
-  printf 'Save credentials for future deploys? [Y/n]: '
-  read -r SAVE_CREDS
-  SAVE_CREDS="${SAVE_CREDS:-Y}"
-  if [[ "$SAVE_CREDS" =~ ^[Yy] ]]; then
-    printf 'CLICKHOUSE_URL=%s\nCLICKHOUSE_USER=%s\nCLICKHOUSE_PASSWORD=%s\n' \
-      "$CLICKHOUSE_URL" "${CLICKHOUSE_USER:-default}" "$CLICKHOUSE_PASSWORD" > "$CREDS_FILE"
-    chmod 600 "$CREDS_FILE"
-    printf '  Saved to .clickhouse-creds\n\n'
-  fi
-}
-
-if [[ -n "${CLICKHOUSE_URL:-}" && -n "${CLICKHOUSE_PASSWORD:-}" ]]; then
-  printf 'Using CLICKHOUSE_URL from environment: %s\n\n' "$CLICKHOUSE_URL"
-elif [[ -f "$CREDS_FILE" ]]; then
-  source "$CREDS_FILE"
-  printf 'Loaded saved endpoint: %s. Use it? [Y/n]: ' "${CLICKHOUSE_URL:-}"
-  read -r USE_SAVED
-  USE_SAVED="${USE_SAVED:-Y}"
-  if [[ ! "$USE_SAVED" =~ ^[Yy] ]]; then
-    unset CLICKHOUSE_URL CLICKHOUSE_PASSWORD
-    _prompt_creds
-  elif [[ -z "${CLICKHOUSE_CLOUD_KEY:-}" ]]; then
-    printf 'New password? [Enter to keep saved]: '
-    read -rs NEW_PASS
-    printf '\n'
-    if [[ -n "$NEW_PASS" ]]; then
-      CLICKHOUSE_PASSWORD="$NEW_PASS"
-      export CLICKHOUSE_PASSWORD
-      printf 'CLICKHOUSE_URL=%s\nCLICKHOUSE_USER=%s\nCLICKHOUSE_PASSWORD=%s\n' \
-        "$CLICKHOUSE_URL" "${CLICKHOUSE_USER:-default}" "$CLICKHOUSE_PASSWORD" > "$CREDS_FILE"
-      chmod 600 "$CREDS_FILE"
-      printf '  Password updated in .clickhouse-creds\n\n'
+_DB_ENV_FILE="$ROOT_DIR/.env.rds"
+if [[ -f "$_DB_ENV_FILE" ]]; then
+  _SAVED_URL="$(grep -E '^DATABASE_URL=' "$_DB_ENV_FILE" 2>/dev/null | cut -d'=' -f2-)"
+  if [[ -n "$_SAVED_URL" ]]; then
+    DATABASE_URL="$_SAVED_URL"
+    printf 'Loaded DATABASE_URL from .env.rds. Use it? [Y/n]: '
+    read -r _USE_SAVED
+    _USE_SAVED="${_USE_SAVED:-Y}"
+    if [[ ! "$_USE_SAVED" =~ ^[Yy] ]]; then
+      DATABASE_URL=''
     fi
   fi
-else
-  _prompt_creds
 fi
+if [[ -z "${DATABASE_URL:-}" ]]; then
+  printf 'Paste DATABASE_URL (postgresql://user:pass@host:5432/db): '
+  read -r DATABASE_URL
+fi
+export TF_VAR_database_url="$DATABASE_URL"
 
-export TF_VAR_clickhouse_url="${CLICKHOUSE_URL}"
-export TF_VAR_clickhouse_password="${CLICKHOUSE_PASSWORD}"
 
 for dep in aws terraform; do
   command -v "$dep" >/dev/null 2>&1 || { printf 'ERROR: %s not found in PATH.\n' "$dep"; exit 1; }

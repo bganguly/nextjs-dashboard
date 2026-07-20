@@ -1,4 +1,4 @@
-import { query } from "@/lib/clickhouse";
+import { query } from "@/lib/db";
 import { AppError, mapDbError } from "@/lib/errors";
 import type { SearchInput, SearchResult, SearchResultItem } from "@/lib/types";
 
@@ -14,35 +14,35 @@ export async function search(input: SearchInput): Promise<SearchResult> {
   try {
     const [orderRows, productRows, customerRows] = await Promise.all([
       (!input.entityType || input.entityType === "order")
-        ? query<{ orderId: string; searchText: string }>(
-            `SELECT orderId, searchText FROM orders
-             WHERE positionCaseInsensitive(searchText, {q: String}) > 0
-             ORDER BY placedAt DESC LIMIT {lim: UInt32}`,
-            { q, lim: limit },
+        ? query<{ order_id: string; search_text: string }>(
+            `SELECT order_id, search_text FROM orders
+             WHERE search_text ILIKE '%' || $1 || '%'
+             ORDER BY placed_at DESC LIMIT $2`,
+            [q, limit],
           )
         : Promise.resolve([]),
       (!input.entityType || input.entityType === "product")
-        ? query<{ productId: string; name: string; sku: string }>(
-            `SELECT productId, name, sku FROM products
-             WHERE positionCaseInsensitive(name || ' ' || sku, {q: String}) > 0
-             LIMIT {lim: UInt32}`,
-            { q, lim: limit },
+        ? query<{ product_id: number; name: string; sku: string }>(
+            `SELECT product_id, name, sku FROM products
+             WHERE (name || ' ' || sku) ILIKE '%' || $1 || '%'
+             LIMIT $2`,
+            [q, limit],
           )
         : Promise.resolve([]),
       (!input.entityType || input.entityType === "customer")
-        ? query<{ customerId: string; firstName: string; lastName: string; email: string }>(
-            `SELECT customerId, firstName, lastName, email FROM customers
-             WHERE positionCaseInsensitive(firstName || ' ' || lastName || ' ' || email, {q: String}) > 0
-             LIMIT {lim: UInt32}`,
-            { q, lim: limit },
+        ? query<{ customer_id: string; first_name: string; last_name: string; email: string }>(
+            `SELECT customer_id, first_name, last_name, email FROM customers
+             WHERE (first_name || ' ' || last_name || ' ' || email) ILIKE '%' || $1 || '%'
+             LIMIT $2`,
+            [q, limit],
           )
         : Promise.resolve([]),
     ]);
 
     const results: SearchResultItem[] = [
-      ...orderRows.map((r) => ({ entityType: "order", entityId: Number(r.orderId), content: r.searchText })),
-      ...productRows.map((r) => ({ entityType: "product", entityId: Number(r.productId), content: `${r.name} ${r.sku}` })),
-      ...customerRows.map((r) => ({ entityType: "customer", entityId: Number(r.customerId), content: `${r.firstName} ${r.lastName} ${r.email}` })),
+      ...orderRows.map((r) => ({ entityType: "order", entityId: Number(r.order_id), content: r.search_text })),
+      ...productRows.map((r) => ({ entityType: "product", entityId: r.product_id, content: `${r.name} ${r.sku}` })),
+      ...customerRows.map((r) => ({ entityType: "customer", entityId: Number(r.customer_id), content: `${r.first_name} ${r.last_name} ${r.email}` })),
     ].slice(0, limit);
 
     return { query: q, results };

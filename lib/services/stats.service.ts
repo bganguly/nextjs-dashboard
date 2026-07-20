@@ -1,4 +1,4 @@
-import { query } from "@/lib/clickhouse";
+import { query } from "@/lib/db";
 import { mapDbError } from "@/lib/errors";
 
 export interface SeedStats {
@@ -9,8 +9,8 @@ export interface SeedStats {
 export async function getSeedStats(): Promise<SeedStats> {
   try {
     const [cRows, pRows] = await Promise.all([
-      query<{ n: string }>(`SELECT count() AS n FROM customers`),
-      query<{ n: string }>(`SELECT count() AS n FROM products`),
+      query<{ n: string }>(`SELECT count(*) AS n FROM customers`),
+      query<{ n: string }>(`SELECT count(*) AS n FROM products`),
     ]);
     return {
       customers: Number(cRows[0]?.n ?? 0),

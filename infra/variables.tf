@@ -10,14 +10,8 @@ variable "name_prefix" {
   default     = "njs-dash"
 }
 
-variable "clickhouse_url" {
-  description = "ClickHouse HTTPS endpoint, e.g. https://host:8443"
-  type        = string
-  sensitive   = true
-}
-
-variable "clickhouse_password" {
-  description = "ClickHouse default user password"
+variable "database_url" {
+  description = "PostgreSQL connection string, e.g. postgresql://user:pass@host:5432/db"
   type        = string
   sensitive   = true
 }
