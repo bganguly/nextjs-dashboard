@@ -1,6 +1,93 @@
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
+data "aws_vpc" "default" {
+  default = true
+}
+
+data "aws_subnets" "default" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
+  filter {
+    name   = "default-for-az"
+    values = ["true"]
+  }
+}
+
+# ── RDS PostgreSQL ─────────────────────────────────────────────────────────────
+
+resource "aws_security_group" "rds" {
+  name        = "${var.name_prefix}-rds"
+  description = "PostgreSQL access from App Runner and local tools"
+  vpc_id      = data.aws_vpc.default.id
+
+  ingress {
+    description = "PostgreSQL"
+    from_port   = 5432
+    to_port     = 5432
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = { Name = "${var.name_prefix}-rds" }
+}
+
+resource "aws_db_subnet_group" "app" {
+  name       = "${var.name_prefix}-db"
+  subnet_ids = data.aws_subnets.default.ids
+  tags       = { Name = "${var.name_prefix}-db" }
+}
+
+resource "random_password" "db" {
+  length  = 24
+  special = false
+}
+
+resource "aws_db_instance" "app" {
+  identifier     = "${var.name_prefix}-db"
+  engine         = "postgres"
+  engine_version = "16"
+  instance_class = "db.t4g.micro"
+
+  db_name  = "dashdb"
+  username = "dashapp"
+  password = random_password.db.result
+  port     = 5432
+
+  db_subnet_group_name   = aws_db_subnet_group.app.name
+  vpc_security_group_ids = [aws_security_group.rds.id]
+  publicly_accessible    = true
+
+  allocated_storage          = 20
+  storage_type               = "gp3"
+  storage_encrypted          = true
+  multi_az                   = false
+  skip_final_snapshot        = true
+  deletion_protection        = false
+  apply_immediately          = true
+  backup_retention_period    = 0
+  auto_minor_version_upgrade = true
+
+  tags = { Name = "${var.name_prefix}-db" }
+
+  lifecycle {
+    ignore_changes = [engine_version]
+  }
+}
+
+locals {
+  database_url = "postgresql://${aws_db_instance.app.username}:${random_password.db.result}@${aws_db_instance.app.address}:${aws_db_instance.app.port}/${aws_db_instance.app.db_name}"
+}
+
 # ── ECR ────────────────────────────────────────────────────────────────────────
 
 resource "aws_ecr_repository" "app" {
@@ -65,7 +152,7 @@ resource "aws_apprunner_service" "app" {
         runtime_environment_variables = {
           NODE_ENV     = "production"
           HOSTNAME     = "0.0.0.0"
-          DATABASE_URL = var.database_url
+          DATABASE_URL = local.database_url
         }
       }
     }
@@ -183,7 +270,7 @@ resource "aws_cloudfront_distribution" "app" {
     max_ttl                = 0
     forwarded_values {
       query_string = true
-      headers      = ["*"]
+      headers      = ["Authorization", "Content-Type", "Origin", "X-Forwarded-For", "Accept"]
       cookies { forward = "all" }
     }
   }
@@ -198,7 +285,7 @@ resource "aws_cloudfront_distribution" "app" {
     max_ttl                = 0
     forwarded_values {
       query_string = true
-      headers      = ["*"]
+      headers      = ["Accept", "Accept-Language", "Origin"]
       cookies { forward = "all" }
     }
   }

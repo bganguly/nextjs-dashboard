@@ -9,9 +9,3 @@ variable "name_prefix" {
   type        = string
   default     = "njs-dash"
 }
-
-variable "database_url" {
-  description = "PostgreSQL connection string, e.g. postgresql://user:pass@host:5432/db"
-  type        = string
-  sensitive   = true
-}

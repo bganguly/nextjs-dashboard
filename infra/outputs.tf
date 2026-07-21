@@ -1,3 +1,9 @@
+output "database_url" {
+  description = "PostgreSQL connection string for the managed RDS instance"
+  value       = local.database_url
+  sensitive   = true
+}
+
 output "ecr_repository_url" {
   description = "ECR repository URL for the app image"
   value       = aws_ecr_repository.app.repository_url

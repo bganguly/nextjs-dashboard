@@ -20,26 +20,6 @@ case "${DEPLOY_TARGET:-2}" in
   *) printf 'Invalid choice.\n'; exit 1 ;;
 esac
 
-_DB_ENV_FILE="$ROOT_DIR/.env.rds"
-if [[ -f "$_DB_ENV_FILE" ]]; then
-  _SAVED_URL="$(grep -E '^DATABASE_URL=' "$_DB_ENV_FILE" 2>/dev/null | cut -d'=' -f2-)"
-  if [[ -n "$_SAVED_URL" ]]; then
-    DATABASE_URL="$_SAVED_URL"
-    printf 'Loaded DATABASE_URL from .env.rds. Use it? [Y/n]: '
-    read -r _USE_SAVED
-    _USE_SAVED="${_USE_SAVED:-Y}"
-    if [[ ! "$_USE_SAVED" =~ ^[Yy] ]]; then
-      DATABASE_URL=''
-    fi
-  fi
-fi
-if [[ -z "${DATABASE_URL:-}" ]]; then
-  printf 'Paste DATABASE_URL (postgresql://user:pass@host:5432/db): '
-  read -r DATABASE_URL
-fi
-export TF_VAR_database_url="$DATABASE_URL"
-
-
 for dep in aws terraform; do
   command -v "$dep" >/dev/null 2>&1 || { printf 'ERROR: %s not found in PATH.\n' "$dep"; exit 1; }
 done
@@ -58,7 +38,7 @@ if command -v gh >/dev/null 2>&1 && [[ -n "$_GH_REPO" ]]; then
   printf '%s' "$_AWS_REGION"              | gh secret set AWS_REGION            --repo "$_GH_REPO"
 fi
 
-printf '[2/4] Provisioning ECR (terraform apply)...\n'
+printf '[2/4] Provisioning ECR + RDS (terraform apply)...\n'
 cd "$INFRA_DIR"
 terraform init -input=false -upgrade >/dev/null
 printf '  Pruning stale state...\n'
@@ -86,7 +66,7 @@ ECR_IMAGE_EXISTS="$(aws ecr describe-images \
   --output text 2>/dev/null || true)"
 
 if [[ -z "$ECR_IMAGE_EXISTS" || "$ECR_IMAGE_EXISTS" == "None" ]]; then
-  printf '  First deploy — provisioning ECR only (App Runner needs an image first).\n'
+  printf '  First deploy — provisioning ECR + RDS (App Runner needs an image first).\n'
   terraform apply -auto-approve -input=false \
     -target=aws_ecr_repository.app \
     -target=aws_ecr_lifecycle_policy.app \
@@ -97,7 +77,11 @@ if [[ -z "$ECR_IMAGE_EXISTS" || "$ECR_IMAGE_EXISTS" == "None" ]]; then
     -target=aws_s3_bucket_public_access_block.maintenance \
     -target=aws_s3_bucket_website_configuration.maintenance \
     -target=aws_s3_bucket_policy.maintenance \
-    -target=aws_s3_object.maintenance_html
+    -target=aws_s3_object.maintenance_html \
+    -target=aws_security_group.rds \
+    -target=aws_db_subnet_group.app \
+    -target=random_password.db \
+    -target=aws_db_instance.app
   FIRST_DEPLOY=1
 else
   terraform apply -auto-approve -input=false
@@ -106,6 +90,12 @@ fi
 
 printf '  Reading Terraform outputs...\n'
 ECR_REPO="$(terraform output -raw ecr_repository_url)"
+
+_DB_URL="$(terraform output -raw database_url 2>/dev/null || true)"
+if [[ -n "$_DB_URL" ]]; then
+  printf 'DATABASE_URL=%s\n' "$_DB_URL" > "$ROOT_DIR/.env.rds"
+  printf '  Saved DATABASE_URL to .env.rds\n'
+fi
 
 printf '[3/4] Verifying ECR image exists...\n'
 _REMOTE_SHA="$(git -C "$ROOT_DIR" ls-remote origin HEAD 2>/dev/null | cut -c1-7)"

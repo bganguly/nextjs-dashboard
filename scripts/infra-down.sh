@@ -22,7 +22,7 @@ printf '\n=== nextjs-dashboard teardown ===\n\n'
 printf '  [1] Local  — stop npm dev process'
 (( _local_running )) && printf ' [running]' || printf ' [not detected]'
 printf '\n'
-printf '  [2] Cloud  — destroy AWS App Runner + ECR + CodeBuild + CDN'
+printf '  [2] Cloud  — destroy AWS App Runner + ECR + RDS + CDN'
 (( _aws_deployed )) && printf ' [deployed]' || printf ' [not deployed]'
 printf '\n'
 printf '\nChoice [1/2, default 2]: '
@@ -65,7 +65,7 @@ if [[ -n "$APP_RUNNER_ARN" ]]; then
     --query 'Service.Status' --output text 2>/dev/null || true)
 fi
 printf '\n  App Runner status: %s\n' "${_svc_status:-unknown}"
-printf '  [1] Start now  [2] Stop now  [3] Suspend schedule  [4] Resume schedule  [enter] Tear down: '
+printf '  [1] Start now  [2] Stop now  [enter] Tear down: '
 read -r _PRE_ACTION
 
 case "${_PRE_ACTION:-}" in
@@ -83,10 +83,6 @@ case "${_PRE_ACTION:-}" in
       || red '  Pause failed.'
     exit 0
     ;;
-  3|4)
-    dim '  No scheduler configured for this project.'
-    exit 0
-    ;;
 esac
 
 # ── tear down ─────────────────────────────────────────────────────────────────
@@ -97,7 +93,7 @@ ECR_REPO_NAME="${NAME_PREFIX}-app"
 printf '\n  This will destroy:\n'
 printf '    App Runner service\n'
 printf '    ECR repository: %s\n' "$ECR_REPO_NAME"
-printf '    CodeBuild project + S3 source bucket\n'
+printf '    RDS PostgreSQL: %s-db\n' "$NAME_PREFIX"
 printf '    CloudFront CDN + S3 maintenance bucket\n'
 printf '\n  Proceed? [Y/n]: '
 read -r _CONFIRM
