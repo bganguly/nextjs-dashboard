@@ -2,8 +2,29 @@ import { NextResponse } from "next/server";
 import { query, execute } from "@/lib/db";
 import { backfillState } from "@/lib/backfill-state";
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function withRetry<T>(fn: () => Promise<T>, retries = 4, delayMs = 3000): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      const msg = String(err);
+      const isTransient = msg.includes("ENOTFOUND") || msg.includes("ECONNREFUSED") || msg.includes("ETIMEDOUT");
+      if (!isTransient || attempt === retries) throw err;
+      console.error(`[backfill] transient error (attempt ${attempt + 1}), retrying in ${delayMs}ms:`, msg);
+      await sleep(delayMs);
+    }
+  }
+  throw lastErr;
+}
+
 async function isEmpty(table: string): Promise<boolean> {
-  const [{ count }] = await query<{ count: string }>(`SELECT COUNT(*) AS count FROM ${table}`);
+  const [{ count }] = await withRetry(() =>
+    query<{ count: string }>(`SELECT COUNT(*) AS count FROM ${table}`)
+  );
   return Number(count) === 0;
 }
 

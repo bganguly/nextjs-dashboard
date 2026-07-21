@@ -203,6 +203,9 @@ AR_SERVICE_URL="$(aws apprunner describe-service \
   --service-arn "$APP_RUNNER_ARN" \
   --query 'Service.ServiceUrl' --output text)"
 
+printf '  Waiting for container warm-up...\n'
+sleep 8
+
 printf '  Triggering backfill on App Runner...\n'
 curl -sf "https://${AR_SERVICE_URL}/api/admin/backfill" >/dev/null \
   || { printf '  Could not reach backfill endpoint.\n'; }
