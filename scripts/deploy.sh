@@ -184,6 +184,11 @@ while true; do
     --output text)"
   if [[ "$SVC_STATUS" == "RUNNING" ]]; then
     printf '  App Runner running.\n'
+    if [[ -n "${CF_DIST_ID:-}" ]]; then
+      printf '  Invalidating CloudFront cache...\n'
+      aws cloudfront create-invalidation --distribution-id "$CF_DIST_ID" --paths "/*" \
+        --query 'Invalidation.Id' --output text
+    fi
     break
   fi
   if [[ "$SVC_STATUS" == "CREATE_FAILED" || "$SVC_STATUS" == "UPDATE_FAILED" ]]; then
