@@ -194,6 +194,40 @@ while true; do
   sleep 20
 done
 
+AR_SERVICE_URL="$(aws apprunner describe-service \
+  --service-arn "$APP_RUNNER_ARN" \
+  --query 'Service.ServiceUrl' --output text)"
+
+printf '  Triggering backfill on App Runner...\n'
+curl -sf "https://${AR_SERVICE_URL}/api/admin/backfill" >/dev/null \
+  || { printf '  Could not reach backfill endpoint.\n'; }
+
+printf '  Polling progress'
+_spin='|/-\'
+_i=0
+while true; do
+  _STATUS="$(curl -sf "https://${AR_SERVICE_URL}/api/admin/backfill/status" 2>/dev/null || echo '{}')"
+  _DONE="$(printf '%s' "$_STATUS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('done', False))" 2>/dev/null)"
+  _OCF="$(printf '%s' "$_STATUS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('steps',{}).get('order_category_facts','?'))" 2>/dev/null)"
+  _DOC="$(printf '%s' "$_STATUS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('steps',{}).get('daily_order_count','?'))" 2>/dev/null)"
+  _DS="$(printf '%s'  "$_STATUS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('steps',{}).get('daily_summary','?'))" 2>/dev/null)"
+  _ERR="$(printf '%s' "$_STATUS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('error') or '')" 2>/dev/null)"
+  _C="${_spin:$(( _i % 4 )):1}"
+  printf '\r  %s  order_category_facts:%-8s  daily_order_count:%-8s  daily_summary:%-8s' \
+    "$_C" "$_OCF" "$_DOC" "$_DS"
+  _i=$(( _i + 1 ))
+  if [[ "$_DONE" == "True" ]]; then
+    printf '\n'
+    if [[ -n "$_ERR" ]]; then
+      printf '  Backfill error: %s\n' "$_ERR"
+    else
+      printf '  Backfill complete.\n'
+    fi
+    break
+  fi
+  sleep 4
+done
+
 printf '\n  Dashboard: %s\n' "$CDN_URL"
 printf '  Tear down: %s/scripts/infra-down.sh\n\n' "$ROOT_DIR"
 
