@@ -28,11 +28,21 @@ printf '[1/4] Checking AWS credentials...\n'
 aws sts get-caller-identity >/dev/null
 printf '  OK\n'
 
+_AWS_REGION="${TF_VAR_aws_region:-$(aws configure get region 2>/dev/null || echo "us-east-1")}"
+
+_DEFAULT_VPC="$(aws ec2 describe-vpcs --region "$_AWS_REGION" \
+  --filters Name=isDefault,Values=true \
+  --query 'Vpcs[0].VpcId' --output text 2>/dev/null || true)"
+if [[ -z "$_DEFAULT_VPC" || "$_DEFAULT_VPC" == "None" ]]; then
+  printf '  No default VPC in %s — creating one...\n' "$_AWS_REGION"
+  aws ec2 create-default-vpc --region "$_AWS_REGION" >/dev/null
+  printf '  Default VPC created.\n'
+fi
+
 _GH_REPO="$(git -C "$ROOT_DIR" remote get-url origin 2>/dev/null \
   | sed 's|.*github\.com[:/]\(.*\)\.git$|\1|; s|.*github\.com[:/]\(.*\)$|\1|')"
 if command -v gh >/dev/null 2>&1 && [[ -n "$_GH_REPO" ]]; then
   printf '  Syncing AWS credentials to GitHub Actions secrets (%s)...\n' "$_GH_REPO"
-  _AWS_REGION="$(aws configure get region 2>/dev/null || echo "us-east-1")"
   aws configure get aws_access_key_id     | gh secret set AWS_ACCESS_KEY_ID     --repo "$_GH_REPO"
   aws configure get aws_secret_access_key | gh secret set AWS_SECRET_ACCESS_KEY --repo "$_GH_REPO"
   printf '%s' "$_AWS_REGION"              | gh secret set AWS_REGION            --repo "$_GH_REPO"
