@@ -85,7 +85,7 @@ resource "aws_db_instance" "app" {
 }
 
 locals {
-  database_url = "postgresql://${aws_db_instance.app.username}:${random_password.db.result}@${aws_db_instance.app.address}:${aws_db_instance.app.port}/${aws_db_instance.app.db_name}"
+  database_url = "postgresql://${aws_db_instance.app.username}:${random_password.db.result}@${aws_db_instance.app.address}:${aws_db_instance.app.port}/${aws_db_instance.app.db_name}?sslmode=require"
 }
 
 # ── ECR ────────────────────────────────────────────────────────────────────────
