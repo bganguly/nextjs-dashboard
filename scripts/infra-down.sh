@@ -18,19 +18,47 @@ _tf_state="$INFRA_DIR/terraform.tfstate"
 _aws_deployed=0
 [[ -f "$_tf_state" ]] && _aws_deployed=1 || true
 
+_ws_down_sh="$ROOT_DIR/../websockets-quickorder/scripts/infra-down.sh"
+_ws_lite_count=0
+if [[ -f "$ROOT_DIR/../websockets-quickorder/infra/terraform.tfstate.d/lite/terraform.tfstate" ]]; then
+  _ws_lite_count=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    print(sum(1 for r in d.get('resources',[]) if r.get('mode')=='managed'))
+except Exception:
+    print(0)
+" "$ROOT_DIR/../websockets-quickorder/infra/terraform.tfstate.d/lite/terraform.tfstate" 2>/dev/null || echo 0)
+fi
+
 printf '\n=== nextjs-dashboard teardown ===\n\n'
-printf '  [1] Local  — stop npm dev process'
+printf '  [1] Local     — stop npm dev process'
 (( _local_running )) && printf ' [running]' || printf ' [not detected]'
 printf '\n'
-printf '  [2] Cloud  — destroy AWS App Runner + ECR + RDS + CDN'
+printf '  [2] WebSocket — destroy Quick Order EC2 + CloudFront only'
+(( _ws_lite_count > 0 )) && printf ' [%s resources active]' "$_ws_lite_count" || printf ' [not deployed]'
+printf '\n'
+printf '  [3] Cloud     — destroy AWS App Runner + ECR + RDS + CDN'
 (( _aws_deployed )) && printf ' [deployed]' || printf ' [not deployed]'
 printf '\n'
-printf '\nChoice [1/2, default 2]: '
+printf '\nChoice [1/2/3, default 3]: '
 read -r _MODE
 case "$_MODE" in
   1) _TARGET="local" ;;
+  2) _TARGET="websocket" ;;
   *) _TARGET="cloud" ;;
 esac
+
+# ── websocket only ────────────────────────────────────────────────────────────
+if [[ "$_TARGET" == "websocket" ]]; then
+  if [[ -x "$_ws_down_sh" ]]; then
+    DEPLOY_MODE=lite bash "$_ws_down_sh"
+  else
+    red '  websockets-quickorder/scripts/infra-down.sh not found.'
+    exit 1
+  fi
+  exit 0
+fi
 
 # ── local ─────────────────────────────────────────────────────────────────────
 if [[ "$_TARGET" == "local" ]]; then

@@ -116,6 +116,7 @@ export default function Dashboard() {
   const [updatingSlug, setUpdatingSlug] = useState<string | null>(null);
   const [lastSseOrder, setLastSseOrder] = useState<{ categorySlug: string; placedAt: string } | null>(null);
   const [lastOrder, setLastOrder] = useState<{ id?: string | number; date?: string; seq: number } | null>(null);
+  const [quickOrderEnabled, setQuickOrderEnabled] = useState<boolean | null>(null);
 
   const handleEvent = useCallback((event: LiveEvent) => {
     if (event.id == null) return;
@@ -160,6 +161,13 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
+    fetch("/api/config")
+      .then((r) => r.ok ? r.json() as Promise<{ quickOrderEnabled: boolean }> : null)
+      .then((d) => setQuickOrderEnabled(d?.quickOrderEnabled ?? true))
+      .catch(() => setQuickOrderEnabled(true));
+  }, []);
+
+  useEffect(() => {
     setChartTotal(null);
   }, [filters, searchQuery]);
 
@@ -183,31 +191,35 @@ export default function Dashboard() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <label className="flex cursor-pointer items-center gap-1.5 text-sm text-gray-500 select-none">
-              <input
-                type="checkbox"
-                checked={liveEnabled}
-                onChange={async (e) => {
-                  const on = e.target.checked;
-                  setLiveEnabled(on);
-                  if (!on) { setQuickOrderUnavailable(false); return; }
-                  try {
-                    await fetch(QUICK_ORDER_URL, { mode: "no-cors", signal: AbortSignal.timeout(1500) });
-                    setQuickOrderUnavailable(false);
-                    window.open(QUICK_ORDER_URL, "_blank");
-                  } catch {
-                    setQuickOrderUnavailable(true);
-                  }
-                }}
-                className="h-4 w-4 rounded border-gray-300 accent-indigo-600"
-              />
-              Live
-            </label>
-            {liveEnabled && quickOrderUnavailable && (
-              <span className="text-xs text-gray-400 dark:text-gray-500"
-                title={`Quick Order not reachable at ${QUICK_ORDER_URL}`}>
-                Quick Order offline
-              </span>
+            {quickOrderEnabled && (
+              <>
+                <label className="flex cursor-pointer items-center gap-1.5 text-sm text-gray-500 select-none">
+                  <input
+                    type="checkbox"
+                    checked={liveEnabled}
+                    onChange={async (e) => {
+                      const on = e.target.checked;
+                      setLiveEnabled(on);
+                      if (!on) { setQuickOrderUnavailable(false); return; }
+                      try {
+                        await fetch(QUICK_ORDER_URL, { mode: "no-cors", signal: AbortSignal.timeout(1500) });
+                        setQuickOrderUnavailable(false);
+                        window.open(QUICK_ORDER_URL, "_blank");
+                      } catch {
+                        setQuickOrderUnavailable(true);
+                      }
+                    }}
+                    className="h-4 w-4 rounded border-gray-300 accent-indigo-600"
+                  />
+                  Live
+                </label>
+                {liveEnabled && quickOrderUnavailable && (
+                  <span className="text-xs text-gray-400 dark:text-gray-500"
+                    title={`Quick Order not reachable at ${QUICK_ORDER_URL}`}>
+                    Quick Order offline
+                  </span>
+                )}
+              </>
             )}
             <ThemeToggle />
           </div>

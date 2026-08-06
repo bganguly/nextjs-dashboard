@@ -148,6 +148,14 @@ if [[ "$_DEPLOY_TAG" != "latest" ]]; then
     && printf '  Re-tagged %s as latest.\n' "$_DEPLOY_TAG" || true
 fi
 
+printf '\nDeploy WebSocket Quick Order UI (EC2 + CloudFront)? [y/N, default N]: '
+read -r _WS_DEPLOY
+if [[ "${_WS_DEPLOY:-N}" =~ ^[Yy]$ ]]; then
+  export TF_VAR_quick_order_enabled=true
+else
+  export TF_VAR_quick_order_enabled=false
+fi
+
 printf '[4/4] Completing infrastructure (terraform apply)...\n'
 cd "$INFRA_DIR"
 _AR_ARN_PRE="$(terraform output -raw apprunner_service_arn 2>/dev/null || true)"
@@ -242,4 +250,14 @@ printf '  Tear down: %s/scripts/infra-down.sh\n\n' "$ROOT_DIR"
 PORTFOLIO_SCRIPT="$ROOT_DIR/../../portfolio/scripts/set-live-url.sh"
 if [[ -x "$PORTFOLIO_SCRIPT" ]]; then
   bash "$PORTFOLIO_SCRIPT" nextjs "$CDN_URL"
+fi
+
+if [[ "${TF_VAR_quick_order_enabled:-false}" == "true" ]]; then
+  _WS_DEPLOY_SH="$ROOT_DIR/../websockets-quickorder/scripts/deploy.sh"
+  if [[ -x "$_WS_DEPLOY_SH" ]]; then
+    printf '\n=== deploying WebSocket Quick Order (lite) ===\n'
+    DEPLOY_MODE=lite BACKEND_URL="https://${AR_SERVICE_URL}" bash "$_WS_DEPLOY_SH"
+  else
+    printf '\n  websockets-quickorder/scripts/deploy.sh not found — skipping.\n'
+  fi
 fi

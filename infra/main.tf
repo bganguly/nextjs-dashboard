@@ -150,9 +150,10 @@ resource "aws_apprunner_service" "app" {
       image_configuration {
         port = "3000"
         runtime_environment_variables = {
-          NODE_ENV     = "production"
-          HOSTNAME     = "0.0.0.0"
-          DATABASE_URL = local.database_url
+          NODE_ENV            = "production"
+          HOSTNAME            = "0.0.0.0"
+          DATABASE_URL        = local.database_url
+          QUICK_ORDER_ENABLED = var.quick_order_enabled
         }
       }
     }

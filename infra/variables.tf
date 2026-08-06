@@ -9,3 +9,9 @@ variable "name_prefix" {
   type        = string
   default     = "njs-dash"
 }
+
+variable "quick_order_enabled" {
+  description = "Set to 'true' to expose QUICK_ORDER_ENABLED=true to the App Runner service (shows the Live WebSocket checkbox)"
+  type        = string
+  default     = "false"
+}
