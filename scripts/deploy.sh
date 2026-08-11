@@ -247,10 +247,6 @@ done
 printf '\n  Dashboard: %s\n' "$CDN_URL"
 printf '  Tear down: %s/scripts/infra-down.sh\n\n' "$ROOT_DIR"
 
-PORTFOLIO_SCRIPT="$ROOT_DIR/../../portfolio/scripts/set-live-url.sh"
-if [[ -x "$PORTFOLIO_SCRIPT" ]]; then
-  bash "$PORTFOLIO_SCRIPT" nextjs "$CDN_URL"
-fi
 
 if [[ "${TF_VAR_quick_order_enabled:-false}" == "true" ]]; then
   _WS_DEPLOY_SH="$ROOT_DIR/../websockets-quickorder/scripts/deploy.sh"
