@@ -123,7 +123,19 @@ if ! _ecr_image_exists "$_DEPLOY_TAG"; then
     printf '  SHA %s not in ECR (image unchanged) — using latest.\n' "$_DEPLOY_TAG"
     _DEPLOY_TAG=latest
   else
-    printf '  No image in ECR yet — waiting for GitHub Actions build (up to 10 min)...\n'
+    printf '  No image in ECR yet.\n'
+    if command -v gh >/dev/null 2>&1 && [[ -n "${_GH_REPO:-}" ]]; then
+      _LAST_FAILED_RUN="$(gh run list --repo "$_GH_REPO" --workflow deploy.yml \
+        --status failure --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)"
+      if [[ -n "$_LAST_FAILED_RUN" ]]; then
+        printf '  Re-running last failed GHA build (run %s) now that ECR exists...\n' "$_LAST_FAILED_RUN"
+        gh run rerun "$_LAST_FAILED_RUN" --repo "$_GH_REPO" --failed
+      else
+        printf '  No failed run found — triggering workflow dispatch...\n'
+        gh workflow run deploy.yml --repo "$_GH_REPO" --ref main
+      fi
+    fi
+    printf '  Waiting for GitHub Actions build (up to 10 min)...\n'
     _ecr_elapsed=0
     until _ecr_image_exists "latest"; do
       if (( _ecr_elapsed >= 600 )); then
