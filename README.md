@@ -14,7 +14,7 @@ persistent count cache, Server-Sent Events for live updates, and Terraform IaC o
 
 ---
 
-| | |
+| Component | Implementation |
 |---|---|
 | **Next.js / TypeScript full-stack** | Next.js 16, React 19, TypeScript, Tailwind CSS, Recharts |
 | **PostgreSQL — SQL, performance tuning** | AWS RDS PG 16; Prisma migrations; GIN index; pre-aggregated summary tables; persistent `count_cache` (10-min TTL) for sub-second pagination counts on 500 k rows |
@@ -100,7 +100,45 @@ curl "$BASE/api/aggregates?from=2024-01-01&to=2024-12-31" | jq 'length'
 
 ---
 
-## Architecture / Topology
+## Architecture
+
+### Search & chart request flow — step by step
+
+1. **Browser → CloudFront → Next.js** — the React UI sends `GET /api/orders?q=sara` to the CloudFront distribution, which proxies to the Next.js API route on EC2.
+2. **Customer-id enumeration** — Next.js issues `SELECT id FROM customers WHERE name ILIKE '%sara%'` against RDS; the GIN index on `(firstName, lastName)` keeps this sub-second across 500 k customers.
+3. **Order join** — Next.js follows with `SELECT orders WHERE customerId = ANY(ids)` keyset-paginated by `(placedAt DESC, id DESC)`; the `count_cache` table (10-min TTL) serves the total without a COUNT(*) scan.
+4. **Chart path** — `GET /api/aggregates` reads from pre-aggregated `daily_summary` and related rollup tables — never touches raw orders; millisecond response.
+5. **SSE live updates** — a dashboard tab holds an open `GET /api/stream` connection. When the Quick Order tool posts a new order, Next.js writes the order + an outbox row in one `prisma.$transaction`, then calls `publishOrderEvent()`; the SSE stream pushes the event to all connected tabs within ~100 ms.
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant CF as CloudFront
+    participant NX as Next.js (EC2)
+    participant PG as RDS PostgreSQL
+
+    B->>CF: GET /api/orders?q=sara
+    CF->>NX: forward
+    NX->>PG: SELECT id FROM customers WHERE name ILIKE (GIN index)
+    PG-->>NX: [customerId list]
+    NX->>PG: SELECT orders WHERE customerId = ANY(ids) — keyset page
+    NX->>PG: count_cache lookup (10-min TTL)
+    PG-->>B: { data, total }
+
+    B->>CF: GET /api/aggregates
+    CF->>NX: forward
+    NX->>PG: SELECT from daily_summary (pre-agg tables)
+    PG-->>B: chart data
+
+    Note over B,NX: SSE live-update path
+    B->>NX: GET /api/stream (keep-alive)
+    NX-->>B: SSE connection open
+    B->>NX: POST /api/orders (Quick Order tab)
+    NX->>PG: INSERT order + outbox row (prisma.$transaction)
+    NX-->>B: SSE push → dashboard refreshes (~100 ms)
+```
+
+### Topology
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
