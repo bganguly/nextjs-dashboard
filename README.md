@@ -4,7 +4,7 @@ Production-grade **Next.js 16 / TypeScript** full-stack orders dashboard deliver
 and chart responses across 500 k orders: full-text search, pre-aggregated analytics tables,
 persistent count cache, Server-Sent Events for live updates, and Terraform IaC on AWS.
 
-**[→ Portfolio demo](https://bganguly.github.io/?open=nextjs)**
+**[→ Portfolio demo](https://bganguly.github.io/#nextjs_dashboard)**
 
 ## Using the App
 
