@@ -69,32 +69,59 @@ with open('$_STATE_FILE', 'w') as f: json.dump(s, f, indent=2)
 " 2>/dev/null || true
 fi
 
+_RDS_IN_STATE=0
+terraform state show aws_db_instance.app >/dev/null 2>&1 && _RDS_IN_STATE=1 || true
+
+_PROVISION_RDS=1
+if [[ "$_RDS_IN_STATE" -eq 0 ]]; then
+  printf '\n  RDS (db.t4g.micro, ~$12/mo) is required for the live dashboard but is not provisioned.\n'
+  printf '  Build fresh? [y/N]: '
+  read -r _BUILD_FRESH
+  [[ "${_BUILD_FRESH:-N}" =~ ^[Yy]$ ]] && _PROVISION_RDS=1 || _PROVISION_RDS=0
+  [[ "$_PROVISION_RDS" -eq 0 ]] && printf '  Deploying ECR + image pipeline only (no live dashboard).\n\n'
+fi
+
 ECR_IMAGE_EXISTS="$(aws ecr describe-images \
   --repository-name "${TF_VAR_name_prefix:-njs-dash}-app" \
   --image-ids imageTag=latest \
   --query 'imageDetails[0].imageDigest' \
   --output text 2>/dev/null || true)"
 
+_ECR_TARGETS=(
+  -target=aws_ecr_repository.app
+  -target=aws_ecr_lifecycle_policy.app
+  -target=aws_iam_role.apprunner_ecr
+  -target=aws_iam_role_policy_attachment.apprunner_ecr
+  -target=aws_apprunner_auto_scaling_configuration_version.app
+  -target=aws_s3_bucket.maintenance
+  -target=aws_s3_bucket_public_access_block.maintenance
+  -target=aws_s3_bucket_website_configuration.maintenance
+  -target=aws_s3_bucket_policy.maintenance
+  -target=aws_s3_object.maintenance_html
+)
+_RDS_TARGETS=(
+  -target=aws_security_group.rds
+  -target=aws_db_subnet_group.app
+  -target=random_password.db
+  -target=aws_db_instance.app
+)
+
 if [[ -z "$ECR_IMAGE_EXISTS" || "$ECR_IMAGE_EXISTS" == "None" ]]; then
-  printf '  First deploy — provisioning ECR + RDS (App Runner needs an image first).\n'
-  terraform apply -auto-approve -input=false \
-    -target=aws_ecr_repository.app \
-    -target=aws_ecr_lifecycle_policy.app \
-    -target=aws_iam_role.apprunner_ecr \
-    -target=aws_iam_role_policy_attachment.apprunner_ecr \
-    -target=aws_apprunner_auto_scaling_configuration_version.app \
-    -target=aws_s3_bucket.maintenance \
-    -target=aws_s3_bucket_public_access_block.maintenance \
-    -target=aws_s3_bucket_website_configuration.maintenance \
-    -target=aws_s3_bucket_policy.maintenance \
-    -target=aws_s3_object.maintenance_html \
-    -target=aws_security_group.rds \
-    -target=aws_db_subnet_group.app \
-    -target=random_password.db \
-    -target=aws_db_instance.app
+  printf '  First deploy — provisioning ECR + image pipeline'
+  [[ "$_PROVISION_RDS" -eq 1 ]] && printf ' + RDS'
+  printf '.\n'
+  if [[ "$_PROVISION_RDS" -eq 1 ]]; then
+    terraform apply -auto-approve -input=false "${_ECR_TARGETS[@]}" "${_RDS_TARGETS[@]}"
+  else
+    terraform apply -auto-approve -input=false "${_ECR_TARGETS[@]}"
+  fi
   FIRST_DEPLOY=1
 else
-  terraform apply -auto-approve -input=false
+  if [[ "$_PROVISION_RDS" -eq 1 ]]; then
+    terraform apply -auto-approve -input=false
+  else
+    terraform apply -auto-approve -input=false "${_ECR_TARGETS[@]}"
+  fi
   FIRST_DEPLOY=0
 fi
 
@@ -158,6 +185,12 @@ if [[ "$_DEPLOY_TAG" != "latest" ]]; then
     --repository-name "${TF_VAR_name_prefix:-njs-dash}-app" \
     --image-tag latest --image-manifest "$_MANIFEST" >/dev/null 2>&1 \
     && printf '  Re-tagged %s as latest.\n' "$_DEPLOY_TAG" || true
+fi
+
+if [[ "$_PROVISION_RDS" -eq 0 ]]; then
+  printf '\n  ECR + image pipeline ready.\n'
+  printf '  Re-run deploy.sh and provision RDS when ready to go live.\n\n'
+  exit 0
 fi
 
 printf '\nDeploy WebSocket Quick Order UI (EC2 + CloudFront)? [y/N, default N]: '
