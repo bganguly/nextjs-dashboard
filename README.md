@@ -25,6 +25,8 @@ persistent count cache, Server-Sent Events for live updates, and Terraform IaC o
 
 ---
 
+## Stack
+
 | Component | Implementation |
 |---|---|
 | **Next.js / TypeScript full-stack** | Next.js 16, React 19, TypeScript, Tailwind CSS, Recharts |
@@ -152,7 +154,7 @@ Browser ──HTTP──► Next.js API routes ──Prisma──► AWS RDS PG 
 
 ---
 
-## Running
+## Deployment / Running
 
 ```bash
 ./scripts/deploy.sh      # local [1] or AWS RDS [2]
