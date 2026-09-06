@@ -25,21 +25,6 @@ persistent count cache, Server-Sent Events for live updates, and Terraform IaC o
 
 ---
 
-## Stack
-
-| Component | Implementation |
-|---|---|
-| **Next.js / TypeScript full-stack** | Next.js 16, React 19, TypeScript, Tailwind CSS, Recharts |
-| **PostgreSQL — SQL, performance tuning** | AWS RDS PG 16; Prisma migrations; GIN index; pre-aggregated summary tables; persistent `count_cache` (10-min TTL) for sub-second pagination counts on 500 k rows |
-| **IaC** | Terraform (`infra/main.tf`) — VPC, subnets, security groups, RDS PostgreSQL |
-| **CI/CD** | `deploy.sh` — single entry point: provisions AWS infra if needed, applies Prisma schema + SQL migrations, builds and starts the app |
-| **Real-time updates** | Server-Sent Events (`/api/stream`) — new orders pushed live to all connected dashboard tabs without polling |
-| **Networking** | AWS VPC + public subnets; RDS locked to caller IP via security group |
-| **Performance optimization** | Sub-second ILIKE via customer-id enumeration + GIN index on customers; persistent `count_cache` eliminates repeat COUNT(*) scans; pre-agg tables for chart; startup warmup pre-seeds cache for first-page tokens |
-| **System design diagrams** | See architecture section below |
-
----
-
 ## Architecture
 
 ### Search & chart request flow — step by step
@@ -141,16 +126,18 @@ Quick Order (port 3005, bganguly/websockets-quickorder)
 
 ---
 
-## Scale & Performance
+## Stack
 
-> **500 k orders** in AWS RDS PostgreSQL 16 — sub-second full-text search via customer-id enumeration + GIN index; millisecond chart aggregates from pre-aggregated tables; `count_cache` removes the COUNT bottleneck on repeat queries.
-
-```
-Browser ──HTTP──► Next.js API routes ──Prisma──► AWS RDS PG 16
-                  (port 3004)                    VPC · 500 k rows · GIN index
-                            ▲
-             Terraform IaC (infra/main.tf)
-```
+| Component | Implementation |
+|---|---|
+| **Next.js / TypeScript full-stack** | Next.js 16, React 19, TypeScript, Tailwind CSS, Recharts |
+| **PostgreSQL — SQL, performance tuning** | AWS RDS PG 16; Prisma migrations; GIN index; pre-aggregated summary tables; persistent `count_cache` (10-min TTL) for sub-second pagination counts on 500 k rows |
+| **IaC** | Terraform (`infra/main.tf`) — VPC, subnets, security groups, RDS PostgreSQL |
+| **CI/CD** | `deploy.sh` — single entry point: provisions AWS infra if needed, applies Prisma schema + SQL migrations, builds and starts the app |
+| **Real-time updates** | Server-Sent Events (`/api/stream`) — new orders pushed live to all connected dashboard tabs without polling |
+| **Networking** | AWS VPC + public subnets; RDS locked to caller IP via security group |
+| **Performance optimization** | Sub-second ILIKE via customer-id enumeration + GIN index on customers; persistent `count_cache` eliminates repeat COUNT(*) scans; pre-agg tables for chart; startup warmup pre-seeds cache for first-page tokens |
+| **System design diagrams** | See architecture section below |
 
 ---
 
@@ -186,6 +173,19 @@ EC2 auto-stops on a weekday schedule managed by EventBridge Scheduler. **RDS run
 ```
 
 > **Note:** AWS auto-restarts a stopped RDS instance after 7 continuous days — the weekday schedule prevents this from happening unintentionally.
+
+---
+
+## Scale & Performance
+
+> **500 k orders** in AWS RDS PostgreSQL 16 — sub-second full-text search via customer-id enumeration + GIN index; millisecond chart aggregates from pre-aggregated tables; `count_cache` removes the COUNT bottleneck on repeat queries.
+
+```
+Browser ──HTTP──► Next.js API routes ──Prisma──► AWS RDS PG 16
+                  (port 3004)                    VPC · 500 k rows · GIN index
+                            ▲
+             Terraform IaC (infra/main.tf)
+```
 
 ---
 
