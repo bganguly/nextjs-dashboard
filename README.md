@@ -38,79 +38,6 @@ persistent count cache, Server-Sent Events for live updates, and Terraform IaC o
 
 ---
 
-## Scale & Performance
-
-> **500 k orders** in AWS RDS PostgreSQL 16 — sub-second full-text search via customer-id enumeration + GIN index; millisecond chart aggregates from pre-aggregated tables; `count_cache` removes the COUNT bottleneck on repeat queries.
-
-```
-Browser ──HTTP──► Next.js API routes ──Prisma──► AWS RDS PG 16
-                  (port 3004)                    VPC · 500 k rows · GIN index
-                            ▲
-             Terraform IaC (infra/main.tf)
-```
-
----
-
-## Running
-
-```bash
-./scripts/deploy.sh      # local [1] or AWS RDS [2]
-./scripts/infra-down.sh  # stop local [1] or teardown AWS [2]
-```
-
-### Cost control — scheduled 8am–5pm Pacific window (weekdays)
-
-EC2 auto-stops on a weekday schedule managed by EventBridge Scheduler. **RDS runs 24/7** — stopping it flushes PostgreSQL `shared_buffers`, making the first search of every morning cold (~1 s on EBS). Keeping RDS up matches the GCP pattern where the Postgres VM never stops.
-
-| Resource | Scale-up | Scale-down | Idle cost | ~$/mo ¹ |
-|---|---|---|---|---|
-| **EC2 t3.small** (lite & full) | 8am PT Mon–Fri | 5pm PT Mon–Fri | ~$0 (stopped) | ~$4 |
-| **RDS db.t3.micro** (lite) + 20 GB storage | always-on | always-on | billed continuously | ~$14 |
-| **RDS db.t3.large** (full) + 50 GB storage | always-on | always-on | billed continuously | ~$110 |
-| **Lite total** | | | | **~$18/mo** |
-| **Full total** | | | | **~$124/mo** |
-
-¹ EC2 ≈ 200 hrs/month active (scheduled); RDS 720 hrs/month. On-demand us-east-1 pricing.
-
-> **Savings if you also stop RDS on schedule** (~$8/mo lite, ~$75/mo full): re-enable by adding back `start_rds` / `stop_rds` schedules in `infra/main.tf` — at the cost of cold-cache first-search latency each morning.
-
-`./scripts/deploy.sh` shows an interactive prompt at the top of every remote run:
-
-```
-  EC2: running       RDS: available (always-on)
-  Auto-schedule: starts 8 am · stops 5 pm · weekdays Pacific · state=ENABLED
-  [1] Start now  [2] Stop now  [3] Suspend schedule  [4] Resume schedule  [enter] Continue:
-```
-
-> **Note:** AWS auto-restarts a stopped RDS instance after 7 continuous days — the weekday schedule prevents this from happening unintentionally.
-
----
-
-## Live Service
-
-> **Schedule:** EC2 runs weekdays 8 am – 5 pm PT (EventBridge auto-start/stop). Outside those hours the app is offline and shows a maintenance page.
-
-| | URL |
-|---|---|
-| **Dashboard** | https://df9jh7fbcc9nk.cloudfront.net |
-| **API Explorer** | https://df9jh7fbcc9nk.cloudfront.net/api-explorer |
-
-```bash
-# local
-BASE=http://localhost:3004
-curl "$BASE/api/orders?page=1&pageSize=3" | jq .total
-curl "$BASE/api/orders?q=sara+frank&page=1&pageSize=3" | jq '.data[].customer'
-curl "$BASE/api/aggregates?from=2024-01-01&to=2024-12-31" | jq 'length'
-
-# AWS — updated by deploy.sh on each successful deploy
-BASE=https://df9jh7fbcc9nk.cloudfront.net
-curl "$BASE/api/orders?page=1&pageSize=3" | jq .total
-curl "$BASE/api/orders?q=sara+frank&page=1&pageSize=3" | jq '.data[].customer'
-curl "$BASE/api/aggregates?from=2024-01-01&to=2024-12-31" | jq 'length'
-```
-
----
-
 ## Architecture
 
 ### Search & chart request flow — step by step
@@ -209,6 +136,79 @@ Quick Order (port 3005, bganguly/websockets-quickorder)
 | **Count performance** | Persistent `count_cache` table (10-min TTL) + startup warmup for first-page tokens — eliminates repeat COUNT(*) scans on 500 k rows |
 | **Sort stability** | `placedAt DESC, id DESC` tiebreaker on all sort fields — prevents row duplication or skipping across pages |
 | **Real-time** | SSE over HTTP long-poll — no WebSocket server needed; compatible with Next.js API routes; dashboard updates within ~100 ms of order creation |
+
+---
+
+## Scale & Performance
+
+> **500 k orders** in AWS RDS PostgreSQL 16 — sub-second full-text search via customer-id enumeration + GIN index; millisecond chart aggregates from pre-aggregated tables; `count_cache` removes the COUNT bottleneck on repeat queries.
+
+```
+Browser ──HTTP──► Next.js API routes ──Prisma──► AWS RDS PG 16
+                  (port 3004)                    VPC · 500 k rows · GIN index
+                            ▲
+             Terraform IaC (infra/main.tf)
+```
+
+---
+
+## Running
+
+```bash
+./scripts/deploy.sh      # local [1] or AWS RDS [2]
+./scripts/infra-down.sh  # stop local [1] or teardown AWS [2]
+```
+
+### Cost control — scheduled 8am–5pm Pacific window (weekdays)
+
+EC2 auto-stops on a weekday schedule managed by EventBridge Scheduler. **RDS runs 24/7** — stopping it flushes PostgreSQL `shared_buffers`, making the first search of every morning cold (~1 s on EBS). Keeping RDS up matches the GCP pattern where the Postgres VM never stops.
+
+| Resource | Scale-up | Scale-down | Idle cost | ~$/mo ¹ |
+|---|---|---|---|---|
+| **EC2 t3.small** (lite & full) | 8am PT Mon–Fri | 5pm PT Mon–Fri | ~$0 (stopped) | ~$4 |
+| **RDS db.t3.micro** (lite) + 20 GB storage | always-on | always-on | billed continuously | ~$14 |
+| **RDS db.t3.large** (full) + 50 GB storage | always-on | always-on | billed continuously | ~$110 |
+| **Lite total** | | | | **~$18/mo** |
+| **Full total** | | | | **~$124/mo** |
+
+¹ EC2 ≈ 200 hrs/month active (scheduled); RDS 720 hrs/month. On-demand us-east-1 pricing.
+
+> **Savings if you also stop RDS on schedule** (~$8/mo lite, ~$75/mo full): re-enable by adding back `start_rds` / `stop_rds` schedules in `infra/main.tf` — at the cost of cold-cache first-search latency each morning.
+
+`./scripts/deploy.sh` shows an interactive prompt at the top of every remote run:
+
+```
+  EC2: running       RDS: available (always-on)
+  Auto-schedule: starts 8 am · stops 5 pm · weekdays Pacific · state=ENABLED
+  [1] Start now  [2] Stop now  [3] Suspend schedule  [4] Resume schedule  [enter] Continue:
+```
+
+> **Note:** AWS auto-restarts a stopped RDS instance after 7 continuous days — the weekday schedule prevents this from happening unintentionally.
+
+---
+
+## Live Service
+
+> **Schedule:** EC2 runs weekdays 8 am – 5 pm PT (EventBridge auto-start/stop). Outside those hours the app is offline and shows a maintenance page.
+
+| | URL |
+|---|---|
+| **Dashboard** | https://df9jh7fbcc9nk.cloudfront.net |
+| **API Explorer** | https://df9jh7fbcc9nk.cloudfront.net/api-explorer |
+
+```bash
+# local
+BASE=http://localhost:3004
+curl "$BASE/api/orders?page=1&pageSize=3" | jq .total
+curl "$BASE/api/orders?q=sara+frank&page=1&pageSize=3" | jq '.data[].customer'
+curl "$BASE/api/aggregates?from=2024-01-01&to=2024-12-31" | jq 'length'
+
+# AWS — updated by deploy.sh on each successful deploy
+BASE=https://df9jh7fbcc9nk.cloudfront.net
+curl "$BASE/api/orders?page=1&pageSize=3" | jq .total
+curl "$BASE/api/orders?q=sara+frank&page=1&pageSize=3" | jq '.data[].customer'
+curl "$BASE/api/aggregates?from=2024-01-01&to=2024-12-31" | jq 'length'
+```
 
 ---
 
