@@ -163,29 +163,6 @@ Browser ──HTTP──► Next.js API routes ──Prisma──► AWS RDS PG 
 
 ---
 
-## Live Service
-
-| | URL |
-|---|---|
-| **Dashboard** | https://df9jh7fbcc9nk.cloudfront.net |
-| **API Explorer** | https://df9jh7fbcc9nk.cloudfront.net/api-explorer |
-
-```bash
-# local
-BASE=http://localhost:3004
-curl "$BASE/api/orders?page=1&pageSize=3" | jq .total
-curl "$BASE/api/orders?q=sara+frank&page=1&pageSize=3" | jq '.data[].customer'
-curl "$BASE/api/aggregates?from=2024-01-01&to=2024-12-31" | jq 'length'
-
-# AWS — updated by deploy.sh on each successful deploy
-BASE=https://df9jh7fbcc9nk.cloudfront.net
-curl "$BASE/api/orders?page=1&pageSize=3" | jq .total
-curl "$BASE/api/orders?q=sara+frank&page=1&pageSize=3" | jq '.data[].customer'
-curl "$BASE/api/aggregates?from=2024-01-01&to=2024-12-31" | jq 'length'
-```
-
----
-
 ## Snapshot / Demo Data
 
 Seeding 4 M orders takes ~15-20 min. A maintainer can bake a `pg_dump` snapshot to a private S3
