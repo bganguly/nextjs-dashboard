@@ -5,138 +5,64 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INFRA_DIR="$ROOT_DIR/infra"
 PROJECT_NAME="$(basename "$ROOT_DIR")"
 
-printf '\n=== %s deploy ===\n\n' "$PROJECT_NAME"
-printf '  [1] Local  — npm run dev (port 3004)\n'
-printf '  [2] Cloud  — GitHub Actions → ECR → App Runner (scale-to-zero, wake on first ping)\n\n'
-printf 'Choice [1/2, default 2]: '
-read -r DEPLOY_TARGET
-case "${DEPLOY_TARGET:-2}" in
-  1)
-    cd "$ROOT_DIR"
-    npm install --prefer-offline || npm install
-    exec npm run dev
-    ;;
-  2) ;;
-  *) printf 'Invalid choice.\n'; exit 1 ;;
-esac
-
-for dep in aws terraform; do
-  command -v "$dep" >/dev/null 2>&1 || { printf 'ERROR: %s not found in PATH.\n' "$dep"; exit 1; }
-done
-
-printf '[1/4] Checking AWS credentials...\n'
-aws sts get-caller-identity >/dev/null
-printf '  OK\n'
-
-_AWS_REGION="${TF_VAR_aws_region:-$(aws configure get region 2>/dev/null || echo "us-east-1")}"
-
-_DEFAULT_VPC="$(aws ec2 describe-vpcs --region "$_AWS_REGION" \
-  --filters Name=isDefault,Values=true \
-  --query 'Vpcs[0].VpcId' --output text 2>/dev/null || true)"
-if [[ -z "$_DEFAULT_VPC" || "$_DEFAULT_VPC" == "None" ]]; then
-  printf '  No default VPC in %s — creating one...\n' "$_AWS_REGION"
-  aws ec2 create-default-vpc --region "$_AWS_REGION" >/dev/null
-  printf '  Default VPC created.\n'
-fi
-
-_GH_REPO="$(git -C "$ROOT_DIR" remote get-url origin 2>/dev/null \
-  | sed 's|.*github\.com[:/]\(.*\)\.git$|\1|; s|.*github\.com[:/]\(.*\)$|\1|')"
-if command -v gh >/dev/null 2>&1 && [[ -n "$_GH_REPO" ]]; then
-  printf '  Syncing AWS credentials to GitHub Actions secrets (%s)...\n' "$_GH_REPO"
-  aws configure get aws_access_key_id     | gh secret set AWS_ACCESS_KEY_ID     --repo "$_GH_REPO"
-  aws configure get aws_secret_access_key | gh secret set AWS_SECRET_ACCESS_KEY --repo "$_GH_REPO"
-  printf '%s' "$_AWS_REGION"              | gh secret set AWS_REGION            --repo "$_GH_REPO"
-fi
-
-printf '[2/4] Provisioning ECR + RDS (terraform apply)...\n'
-cd "$INFRA_DIR"
-terraform init -input=false -upgrade >/dev/null
-printf '  Pruning stale state...\n'
-
-terraform state rm aws_codebuild_project.app         2>/dev/null || true
-terraform state rm aws_iam_role_policy.codebuild     2>/dev/null || true
-terraform state rm aws_iam_role.codebuild            2>/dev/null || true
-terraform state rm aws_s3_bucket.codebuild_src       2>/dev/null || true
-
-_STATE_FILE="$INFRA_DIR/terraform.tfstate"
-if [[ -f "$_STATE_FILE" ]]; then
-  python3 -c "
-import json
-with open('$_STATE_FILE') as f: s = json.load(f)
-for k in ('codebuild_source_bucket', 'codebuild_project_name'):
-    s.get('outputs', {}).pop(k, None)
-with open('$_STATE_FILE', 'w') as f: json.dump(s, f, indent=2)
-" 2>/dev/null || true
-fi
-
-_RDS_IN_STATE=0
-terraform state show aws_db_instance.app >/dev/null 2>&1 && _RDS_IN_STATE=1 || true
-
+DEPLOY_TARGET=""
+_AWS_REGION=""
+_GH_REPO=""
 _PROVISION_RDS=1
-if [[ "$_RDS_IN_STATE" -eq 0 ]]; then
-  printf '\n  RDS (db.t4g.micro, ~$12/mo) is required for the live dashboard but is not provisioned.\n'
-  printf '  Build fresh? [y/N]: '
-  read -r _BUILD_FRESH
-  [[ "${_BUILD_FRESH:-N}" =~ ^[Yy]$ ]] && _PROVISION_RDS=1 || _PROVISION_RDS=0
-  [[ "$_PROVISION_RDS" -eq 0 ]] && printf '  Deploying ECR + image pipeline only (no live dashboard).\n\n'
-fi
+FIRST_DEPLOY=0
 
-ECR_IMAGE_EXISTS="$(aws ecr describe-images \
-  --repository-name "${TF_VAR_name_prefix:-njs-dash}-app" \
-  --image-ids imageTag=latest \
-  --query 'imageDetails[0].imageDigest' \
-  --output text 2>/dev/null || true)"
+# ── Menu ──────────────────────────────────────────────────────────────────────
 
-_ECR_TARGETS=(
-  -target=aws_ecr_repository.app
-  -target=aws_ecr_lifecycle_policy.app
-  -target=aws_iam_role.apprunner_ecr
-  -target=aws_iam_role_policy_attachment.apprunner_ecr
-  -target=aws_apprunner_auto_scaling_configuration_version.app
-  -target=aws_s3_bucket.maintenance
-  -target=aws_s3_bucket_public_access_block.maintenance
-  -target=aws_s3_bucket_website_configuration.maintenance
-  -target=aws_s3_bucket_policy.maintenance
-  -target=aws_s3_object.maintenance_html
-)
-_RDS_TARGETS=(
-  -target=aws_security_group.rds
-  -target=aws_db_subnet_group.app
-  -target=random_password.db
-  -target=aws_db_instance.app
-)
+_prompt_menu() {
+  printf '\n=== %s deploy ===\n\n' "$PROJECT_NAME"
+  printf '  [1] Local  — npm run dev (port 3004)\n'
+  printf '  [2] Cloud  — GitHub Actions → ECR → App Runner (scale-to-zero, wake on first ping)\n\n'
+  printf 'Choice [1/2, default 2]: '
+  read -r DEPLOY_TARGET
+}
 
-if [[ -z "$ECR_IMAGE_EXISTS" || "$ECR_IMAGE_EXISTS" == "None" ]]; then
-  printf '  First deploy — provisioning ECR + image pipeline'
-  [[ "$_PROVISION_RDS" -eq 1 ]] && printf ' + RDS'
-  printf '.\n'
-  if [[ "$_PROVISION_RDS" -eq 1 ]]; then
-    terraform apply -auto-approve -input=false "${_ECR_TARGETS[@]}" "${_RDS_TARGETS[@]}"
-  else
-    terraform apply -auto-approve -input=false "${_ECR_TARGETS[@]}"
+# ── Local ─────────────────────────────────────────────────────────────────────
+
+_deploy_local() {
+  cd "$ROOT_DIR"
+  npm install --prefer-offline || npm install
+  exec npm run dev
+}
+
+# ── Credentials + VPC + GH secrets ───────────────────────────────────────────
+
+_check_credentials() {
+  for dep in aws terraform; do
+    command -v "$dep" >/dev/null 2>&1 || { printf 'ERROR: %s not found in PATH.\n' "$dep"; exit 1; }
+  done
+
+  printf '[1/4] Checking AWS credentials...\n'
+  aws sts get-caller-identity >/dev/null
+  printf '  OK\n'
+
+  _AWS_REGION="${TF_VAR_aws_region:-$(aws configure get region 2>/dev/null || echo "us-east-1")}"
+
+  local _DEFAULT_VPC
+  _DEFAULT_VPC="$(aws ec2 describe-vpcs --region "$_AWS_REGION" \
+    --filters Name=isDefault,Values=true \
+    --query 'Vpcs[0].VpcId' --output text 2>/dev/null || true)"
+  if [[ -z "$_DEFAULT_VPC" || "$_DEFAULT_VPC" == "None" ]]; then
+    printf '  No default VPC in %s — creating one...\n' "$_AWS_REGION"
+    aws ec2 create-default-vpc --region "$_AWS_REGION" >/dev/null
+    printf '  Default VPC created.\n'
   fi
-  FIRST_DEPLOY=1
-else
-  if [[ "$_PROVISION_RDS" -eq 1 ]]; then
-    terraform apply -auto-approve -input=false
-  else
-    terraform apply -auto-approve -input=false "${_ECR_TARGETS[@]}"
+
+  _GH_REPO="$(git -C "$ROOT_DIR" remote get-url origin 2>/dev/null \
+    | sed 's|.*github\.com[:/]\(.*\)\.git$|\1|; s|.*github\.com[:/]\(.*\)$|\1|')"
+  if command -v gh >/dev/null 2>&1 && [[ -n "$_GH_REPO" ]]; then
+    printf '  Syncing AWS credentials to GitHub Actions secrets (%s)...\n' "$_GH_REPO"
+    aws configure get aws_access_key_id     | gh secret set AWS_ACCESS_KEY_ID     --repo "$_GH_REPO"
+    aws configure get aws_secret_access_key | gh secret set AWS_SECRET_ACCESS_KEY --repo "$_GH_REPO"
+    printf '%s' "$_AWS_REGION"              | gh secret set AWS_REGION            --repo "$_GH_REPO"
   fi
-  FIRST_DEPLOY=0
-fi
+}
 
-printf '  Reading Terraform outputs...\n'
-ECR_REPO="$(terraform output -raw ecr_repository_url)"
-
-_DB_URL="$(terraform output -raw database_url 2>/dev/null || true)"
-if [[ -n "$_DB_URL" ]]; then
-  printf 'DATABASE_URL=%s\n' "$_DB_URL" > "$ROOT_DIR/.env.rds"
-  printf '  Saved DATABASE_URL to .env.rds\n'
-fi
-
-printf '[3/4] Verifying ECR image exists...\n'
-_REMOTE_SHA="$(git -C "$ROOT_DIR" ls-remote origin HEAD 2>/dev/null | cut -c1-7)"
-_DEPLOY_TAG="${_REMOTE_SHA:-$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || echo "latest")}"
+# ── ECR helper ────────────────────────────────────────────────────────────────
 
 _ecr_image_exists() {
   aws ecr describe-images \
@@ -144,161 +70,285 @@ _ecr_image_exists() {
     --image-ids "imageTag=$1" >/dev/null 2>&1
 }
 
-printf '  Checking ECR for image %s...\n' "$_DEPLOY_TAG"
-if ! _ecr_image_exists "$_DEPLOY_TAG"; then
-  if _ecr_image_exists "latest"; then
-    printf '  SHA %s not in ECR (image unchanged) — using latest.\n' "$_DEPLOY_TAG"
-    _DEPLOY_TAG=latest
-  else
-    printf '  No image in ECR yet.\n'
-    if command -v gh >/dev/null 2>&1 && [[ -n "${_GH_REPO:-}" ]]; then
-      _LAST_FAILED_RUN="$(gh run list --repo "$_GH_REPO" --workflow deploy.yml \
-        --status failure --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)"
-      if [[ -n "$_LAST_FAILED_RUN" ]]; then
-        printf '  Re-running last failed GHA build (run %s) now that ECR exists...\n' "$_LAST_FAILED_RUN"
-        gh run rerun "$_LAST_FAILED_RUN" --repo "$_GH_REPO" --failed
-      else
-        printf '  No failed run found — triggering workflow dispatch...\n'
-        gh workflow run deploy.yml --repo "$_GH_REPO" --ref main
-      fi
-    fi
-    printf '  Waiting for GitHub Actions build (up to 10 min)...\n'
-    _ecr_elapsed=0
-    until _ecr_image_exists "latest"; do
-      if (( _ecr_elapsed >= 600 )); then
-        printf '  Timed out. Check Actions: https://github.com/%s/actions\n' "$_GH_REPO"
-        exit 1
-      fi
-      sleep 15; _ecr_elapsed=$(( _ecr_elapsed + 15 ))
-      printf '  ...%ds\n' "$_ecr_elapsed"
-    done
-    _DEPLOY_TAG=latest
+# ── Provision infra ───────────────────────────────────────────────────────────
+
+_provision_infra() {
+  printf '[2/4] Provisioning ECR + RDS (terraform apply)...\n'
+  cd "$INFRA_DIR"
+  terraform init -input=false -upgrade >/dev/null
+  printf '  Pruning stale state...\n'
+
+  terraform state rm aws_codebuild_project.app         2>/dev/null || true
+  terraform state rm aws_iam_role_policy.codebuild     2>/dev/null || true
+  terraform state rm aws_iam_role.codebuild            2>/dev/null || true
+  terraform state rm aws_s3_bucket.codebuild_src       2>/dev/null || true
+
+  local _STATE_FILE="$INFRA_DIR/terraform.tfstate"
+  if [[ -f "$_STATE_FILE" ]]; then
+    python3 -c "
+import json
+with open('$_STATE_FILE') as f: s = json.load(f)
+for k in ('codebuild_source_bucket', 'codebuild_project_name'):
+    s.get('outputs', {}).pop(k, None)
+with open('$_STATE_FILE', 'w') as f: json.dump(s, f, indent=2)
+" 2>/dev/null || true
   fi
-fi
-printf '  Image %s found in ECR.\n' "$_DEPLOY_TAG"
-if [[ "$_DEPLOY_TAG" != "latest" ]]; then
-  _MANIFEST="$(aws ecr batch-get-image \
+
+  local _RDS_IN_STATE=0
+  terraform state show aws_db_instance.app >/dev/null 2>&1 && _RDS_IN_STATE=1 || true
+
+  _PROVISION_RDS=1
+  if [[ "$_RDS_IN_STATE" -eq 0 ]]; then
+    printf '\n  RDS (db.t4g.micro, ~$12/mo) is required for the live dashboard but is not provisioned.\n'
+    printf '  Build fresh? [y/N]: '
+    read -r _BUILD_FRESH
+    [[ "${_BUILD_FRESH:-N}" =~ ^[Yy]$ ]] && _PROVISION_RDS=1 || _PROVISION_RDS=0
+    [[ "$_PROVISION_RDS" -eq 0 ]] && printf '  Deploying ECR + image pipeline only (no live dashboard).\n\n'
+  fi
+
+  local ECR_IMAGE_EXISTS
+  ECR_IMAGE_EXISTS="$(aws ecr describe-images \
     --repository-name "${TF_VAR_name_prefix:-njs-dash}-app" \
-    --image-ids "imageTag=${_DEPLOY_TAG}" \
-    --query 'images[0].imageManifest' --output text 2>/dev/null)"
-  aws ecr put-image \
-    --repository-name "${TF_VAR_name_prefix:-njs-dash}-app" \
-    --image-tag latest --image-manifest "$_MANIFEST" >/dev/null 2>&1 \
-    && printf '  Re-tagged %s as latest.\n' "$_DEPLOY_TAG" || true
-fi
+    --image-ids imageTag=latest \
+    --query 'imageDetails[0].imageDigest' \
+    --output text 2>/dev/null || true)"
 
-if [[ "$_PROVISION_RDS" -eq 0 ]]; then
-  printf '\n  ECR + image pipeline ready.\n'
-  printf '  Re-run deploy.sh and provision RDS when ready to go live.\n\n'
-  exit 0
-fi
+  local _ECR_TARGETS=(
+    -target=aws_ecr_repository.app
+    -target=aws_ecr_lifecycle_policy.app
+    -target=aws_iam_role.apprunner_ecr
+    -target=aws_iam_role_policy_attachment.apprunner_ecr
+    -target=aws_apprunner_auto_scaling_configuration_version.app
+    -target=aws_s3_bucket.maintenance
+    -target=aws_s3_bucket_public_access_block.maintenance
+    -target=aws_s3_bucket_website_configuration.maintenance
+    -target=aws_s3_bucket_policy.maintenance
+    -target=aws_s3_object.maintenance_html
+  )
+  local _RDS_TARGETS=(
+    -target=aws_security_group.rds
+    -target=aws_db_subnet_group.app
+    -target=random_password.db
+    -target=aws_db_instance.app
+  )
 
-printf '\nDeploy WebSocket Quick Order UI (EC2 + CloudFront)? [y/N, default N]: '
-read -r _WS_DEPLOY
-if [[ "${_WS_DEPLOY:-N}" =~ ^[Yy]$ ]]; then
-  export TF_VAR_quick_order_enabled=true
-else
-  export TF_VAR_quick_order_enabled=false
-fi
-
-printf '[4/4] Completing infrastructure (terraform apply)...\n'
-cd "$INFRA_DIR"
-_AR_ARN_PRE="$(terraform output -raw apprunner_service_arn 2>/dev/null || true)"
-if [[ -n "$_AR_ARN_PRE" ]]; then
-  _AR_STATUS_PRE="$(aws apprunner describe-service --service-arn "$_AR_ARN_PRE" \
-    --query 'Service.Status' --output text 2>/dev/null || true)"
-  if [[ "$_AR_STATUS_PRE" == "CREATE_FAILED" ]]; then
-    printf '  App Runner in CREATE_FAILED — tainting for recreation...\n'
-    terraform taint aws_apprunner_service.app
-  fi
-fi
-terraform apply -auto-approve -input=false
-printf '  Reading Terraform outputs...\n'
-
-APP_RUNNER_ARN="$(terraform output -raw apprunner_service_arn)"
-CDN_URL="$(terraform output -raw cdn_url)"
-CF_DIST_ID="$(terraform output -raw cf_distribution_id 2>/dev/null || true)"
-if command -v gh >/dev/null 2>&1 && [[ -n "$_GH_REPO" && -n "$CF_DIST_ID" ]]; then
-  printf '%s' "$CF_DIST_ID" | gh secret set CF_DISTRIBUTION_ID --repo "$_GH_REPO"
-  printf '  Synced CF_DISTRIBUTION_ID to GitHub Actions secrets.\n'
-fi
-
-if [[ "$FIRST_DEPLOY" == "0" ]]; then
-  printf '[4/4] Deploying new image to App Runner...\n'
-  aws apprunner start-deployment --service-arn "$APP_RUNNER_ARN" >/dev/null
-else
-  printf '[4/4] Waiting for App Runner initial deployment...\n'
-fi
-
-while true; do
-  SVC_STATUS="$(aws apprunner describe-service \
-    --service-arn "$APP_RUNNER_ARN" \
-    --query 'Service.Status' \
-    --output text)"
-  if [[ "$SVC_STATUS" == "RUNNING" ]]; then
-    printf '  App Runner running.\n'
-    if [[ -n "${CF_DIST_ID:-}" ]]; then
-      printf '  Invalidating CloudFront cache...\n'
-      aws cloudfront create-invalidation --distribution-id "$CF_DIST_ID" --paths "/*" \
-        --query 'Invalidation.Id' --output text
-    fi
-    break
-  fi
-  if [[ "$SVC_STATUS" == "CREATE_FAILED" || "$SVC_STATUS" == "UPDATE_FAILED" ]]; then
-    printf 'ERROR: App Runner service failed (%s).\n' "$SVC_STATUS"
-    exit 1
-  fi
-  printf '  Status: %s — waiting...\n' "$SVC_STATUS"
-  sleep 20
-done
-
-AR_SERVICE_URL="$(aws apprunner describe-service \
-  --service-arn "$APP_RUNNER_ARN" \
-  --query 'Service.ServiceUrl' --output text)"
-
-printf '  Waiting for container warm-up...\n'
-sleep 8
-
-printf '  Triggering backfill on App Runner...\n'
-curl -sf "https://${AR_SERVICE_URL}/api/admin/backfill" >/dev/null \
-  || { printf '  Could not reach backfill endpoint.\n'; }
-
-printf '  Polling progress'
-_spin='|/-\'
-_i=0
-while true; do
-  _STATUS="$(curl -sf "https://${AR_SERVICE_URL}/api/admin/backfill/status" 2>/dev/null || echo '{}')"
-  _DONE="$(printf '%s' "$_STATUS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('done', False))" 2>/dev/null)"
-  _OCF="$(printf '%s' "$_STATUS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('steps',{}).get('order_category_facts','?'))" 2>/dev/null)"
-  _DOC="$(printf '%s' "$_STATUS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('steps',{}).get('daily_order_count','?'))" 2>/dev/null)"
-  _DS="$(printf '%s'  "$_STATUS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('steps',{}).get('daily_summary','?'))" 2>/dev/null)"
-  _ERR="$(printf '%s' "$_STATUS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('error') or '')" 2>/dev/null)"
-  _C="${_spin:$(( _i % 4 )):1}"
-  printf '\r  %s  order_category_facts:%-8s  daily_order_count:%-8s  daily_summary:%-8s' \
-    "$_C" "$_OCF" "$_DOC" "$_DS"
-  _i=$(( _i + 1 ))
-  if [[ "$_DONE" == "True" ]]; then
-    printf '\n'
-    if [[ -n "$_ERR" ]]; then
-      printf '  Backfill error: %s\n' "$_ERR"
+  if [[ -z "$ECR_IMAGE_EXISTS" || "$ECR_IMAGE_EXISTS" == "None" ]]; then
+    printf '  First deploy — provisioning ECR + image pipeline'
+    [[ "$_PROVISION_RDS" -eq 1 ]] && printf ' + RDS'
+    printf '.\n'
+    if [[ "$_PROVISION_RDS" -eq 1 ]]; then
+      terraform apply -auto-approve -input=false "${_ECR_TARGETS[@]}" "${_RDS_TARGETS[@]}"
     else
-      printf '  Backfill complete.\n'
+      terraform apply -auto-approve -input=false "${_ECR_TARGETS[@]}"
     fi
-    break
-  fi
-  sleep 4
-done
-
-printf '\n  Dashboard: %s\n' "$CDN_URL"
-printf '  Tear down: %s/scripts/infra-down.sh\n\n' "$ROOT_DIR"
-
-
-if [[ "${TF_VAR_quick_order_enabled:-false}" == "true" ]]; then
-  _WS_DEPLOY_SH="$ROOT_DIR/../websockets-quickorder/scripts/deploy.sh"
-  if [[ -x "$_WS_DEPLOY_SH" ]]; then
-    printf '\n=== deploying WebSocket Quick Order (lite) ===\n'
-    DEPLOY_MODE=lite BACKEND_URL="https://${AR_SERVICE_URL}" bash "$_WS_DEPLOY_SH"
+    FIRST_DEPLOY=1
   else
-    printf '\n  websockets-quickorder/scripts/deploy.sh not found — skipping.\n'
+    if [[ "$_PROVISION_RDS" -eq 1 ]]; then
+      terraform apply -auto-approve -input=false
+    else
+      terraform apply -auto-approve -input=false "${_ECR_TARGETS[@]}"
+    fi
+    FIRST_DEPLOY=0
   fi
-fi
+
+  printf '  Reading Terraform outputs...\n'
+  ECR_REPO="$(terraform output -raw ecr_repository_url)"
+
+  local _DB_URL
+  _DB_URL="$(terraform output -raw database_url 2>/dev/null || true)"
+  if [[ -n "$_DB_URL" ]]; then
+    printf 'DATABASE_URL=%s\n' "$_DB_URL" > "$ROOT_DIR/.env.rds"
+    printf '  Saved DATABASE_URL to .env.rds\n'
+  fi
+}
+
+# ── Wait for ECR image ────────────────────────────────────────────────────────
+
+_wait_for_image() {
+  printf '[3/4] Verifying ECR image exists...\n'
+  local _REMOTE_SHA _DEPLOY_TAG
+  _REMOTE_SHA="$(git -C "$ROOT_DIR" ls-remote origin HEAD 2>/dev/null | cut -c1-7)"
+  _DEPLOY_TAG="${_REMOTE_SHA:-$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || echo "latest")}"
+
+  printf '  Checking ECR for image %s...\n' "$_DEPLOY_TAG"
+  if ! _ecr_image_exists "$_DEPLOY_TAG"; then
+    if _ecr_image_exists "latest"; then
+      printf '  SHA %s not in ECR (image unchanged) — using latest.\n' "$_DEPLOY_TAG"
+      _DEPLOY_TAG=latest
+    else
+      printf '  No image in ECR yet.\n'
+      if command -v gh >/dev/null 2>&1 && [[ -n "${_GH_REPO:-}" ]]; then
+        local _LAST_FAILED_RUN
+        _LAST_FAILED_RUN="$(gh run list --repo "$_GH_REPO" --workflow deploy.yml \
+          --status failure --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)"
+        if [[ -n "$_LAST_FAILED_RUN" ]]; then
+          printf '  Re-running last failed GHA build (run %s) now that ECR exists...\n' "$_LAST_FAILED_RUN"
+          gh run rerun "$_LAST_FAILED_RUN" --repo "$_GH_REPO" --failed
+        else
+          printf '  No failed run found — triggering workflow dispatch...\n'
+          gh workflow run deploy.yml --repo "$_GH_REPO" --ref main
+        fi
+      fi
+      printf '  Waiting for GitHub Actions build (up to 10 min)...\n'
+      local _ecr_elapsed=0
+      until _ecr_image_exists "latest"; do
+        if (( _ecr_elapsed >= 600 )); then
+          printf '  Timed out. Check Actions: https://github.com/%s/actions\n' "$_GH_REPO"
+          exit 1
+        fi
+        sleep 15; _ecr_elapsed=$(( _ecr_elapsed + 15 ))
+        printf '  ...%ds\n' "$_ecr_elapsed"
+      done
+      _DEPLOY_TAG=latest
+    fi
+  fi
+  printf '  Image %s found in ECR.\n' "$_DEPLOY_TAG"
+  if [[ "$_DEPLOY_TAG" != "latest" ]]; then
+    local _MANIFEST
+    _MANIFEST="$(aws ecr batch-get-image \
+      --repository-name "${TF_VAR_name_prefix:-njs-dash}-app" \
+      --image-ids "imageTag=${_DEPLOY_TAG}" \
+      --query 'images[0].imageManifest' --output text 2>/dev/null)"
+    aws ecr put-image \
+      --repository-name "${TF_VAR_name_prefix:-njs-dash}-app" \
+      --image-tag latest --image-manifest "$_MANIFEST" >/dev/null 2>&1 \
+      && printf '  Re-tagged %s as latest.\n' "$_DEPLOY_TAG" || true
+  fi
+}
+
+# ── Deploy App Runner ─────────────────────────────────────────────────────────
+
+_deploy_apprunner() {
+  printf '\nDeploy WebSocket Quick Order UI (EC2 + CloudFront)? [y/N, default N]: '
+  read -r _WS_DEPLOY
+  if [[ "${_WS_DEPLOY:-N}" =~ ^[Yy]$ ]]; then
+    export TF_VAR_quick_order_enabled=true
+  else
+    export TF_VAR_quick_order_enabled=false
+  fi
+
+  printf '[4/4] Completing infrastructure (terraform apply)...\n'
+  cd "$INFRA_DIR"
+  local _AR_ARN_PRE
+  _AR_ARN_PRE="$(terraform output -raw apprunner_service_arn 2>/dev/null || true)"
+  if [[ -n "$_AR_ARN_PRE" ]]; then
+    local _AR_STATUS_PRE
+    _AR_STATUS_PRE="$(aws apprunner describe-service --service-arn "$_AR_ARN_PRE" \
+      --query 'Service.Status' --output text 2>/dev/null || true)"
+    if [[ "$_AR_STATUS_PRE" == "CREATE_FAILED" ]]; then
+      printf '  App Runner in CREATE_FAILED — tainting for recreation...\n'
+      terraform taint aws_apprunner_service.app
+    fi
+  fi
+  terraform apply -auto-approve -input=false
+  printf '  Reading Terraform outputs...\n'
+
+  local APP_RUNNER_ARN CDN_URL CF_DIST_ID
+  APP_RUNNER_ARN="$(terraform output -raw apprunner_service_arn)"
+  CDN_URL="$(terraform output -raw cdn_url)"
+  CF_DIST_ID="$(terraform output -raw cf_distribution_id 2>/dev/null || true)"
+  if command -v gh >/dev/null 2>&1 && [[ -n "$_GH_REPO" && -n "$CF_DIST_ID" ]]; then
+    printf '%s' "$CF_DIST_ID" | gh secret set CF_DISTRIBUTION_ID --repo "$_GH_REPO"
+    printf '  Synced CF_DISTRIBUTION_ID to GitHub Actions secrets.\n'
+  fi
+
+  if [[ "$FIRST_DEPLOY" == "0" ]]; then
+    printf '[4/4] Deploying new image to App Runner...\n'
+    aws apprunner start-deployment --service-arn "$APP_RUNNER_ARN" >/dev/null
+  else
+    printf '[4/4] Waiting for App Runner initial deployment...\n'
+  fi
+
+  local SVC_STATUS
+  while true; do
+    SVC_STATUS="$(aws apprunner describe-service \
+      --service-arn "$APP_RUNNER_ARN" \
+      --query 'Service.Status' \
+      --output text)"
+    if [[ "$SVC_STATUS" == "RUNNING" ]]; then
+      printf '  App Runner running.\n'
+      if [[ -n "${CF_DIST_ID:-}" ]]; then
+        printf '  Invalidating CloudFront cache...\n'
+        aws cloudfront create-invalidation --distribution-id "$CF_DIST_ID" --paths "/*" \
+          --query 'Invalidation.Id' --output text
+      fi
+      break
+    fi
+    if [[ "$SVC_STATUS" == "CREATE_FAILED" || "$SVC_STATUS" == "UPDATE_FAILED" ]]; then
+      printf 'ERROR: App Runner service failed (%s).\n' "$SVC_STATUS"
+      exit 1
+    fi
+    printf '  Status: %s — waiting...\n' "$SVC_STATUS"
+    sleep 20
+  done
+
+  local AR_SERVICE_URL
+  AR_SERVICE_URL="$(aws apprunner describe-service \
+    --service-arn "$APP_RUNNER_ARN" \
+    --query 'Service.ServiceUrl' --output text)"
+
+  printf '  Waiting for container warm-up...\n'
+  sleep 8
+
+  printf '  Triggering backfill on App Runner...\n'
+  curl -sf "https://${AR_SERVICE_URL}/api/admin/backfill" >/dev/null \
+    || { printf '  Could not reach backfill endpoint.\n'; }
+
+  printf '  Polling progress'
+  local _spin='|/-\' _i=0
+  local _STATUS _DONE _OCF _DOC _DS _ERR _C
+  while true; do
+    _STATUS="$(curl -sf "https://${AR_SERVICE_URL}/api/admin/backfill/status" 2>/dev/null || echo '{}')"
+    _DONE="$(printf '%s' "$_STATUS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('done', False))" 2>/dev/null)"
+    _OCF="$(printf '%s' "$_STATUS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('steps',{}).get('order_category_facts','?'))" 2>/dev/null)"
+    _DOC="$(printf '%s' "$_STATUS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('steps',{}).get('daily_order_count','?'))" 2>/dev/null)"
+    _DS="$(printf '%s'  "$_STATUS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('steps',{}).get('daily_summary','?'))" 2>/dev/null)"
+    _ERR="$(printf '%s' "$_STATUS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('error') or '')" 2>/dev/null)"
+    _C="${_spin:$(( _i % 4 )):1}"
+    printf '\r  %s  order_category_facts:%-8s  daily_order_count:%-8s  daily_summary:%-8s' \
+      "$_C" "$_OCF" "$_DOC" "$_DS"
+    _i=$(( _i + 1 ))
+    if [[ "$_DONE" == "True" ]]; then
+      printf '\n'
+      if [[ -n "$_ERR" ]]; then
+        printf '  Backfill error: %s\n' "$_ERR"
+      else
+        printf '  Backfill complete.\n'
+      fi
+      break
+    fi
+    sleep 4
+  done
+
+  printf '\n  Dashboard: %s\n' "$CDN_URL"
+  printf '  Tear down: %s/scripts/infra-down.sh\n\n' "$ROOT_DIR"
+
+  if [[ "${TF_VAR_quick_order_enabled:-false}" == "true" ]]; then
+    local _WS_DEPLOY_SH="$ROOT_DIR/../websockets-quickorder/scripts/deploy.sh"
+    if [[ -x "$_WS_DEPLOY_SH" ]]; then
+      printf '\n=== deploying WebSocket Quick Order (lite) ===\n'
+      DEPLOY_MODE=lite BACKEND_URL="https://${AR_SERVICE_URL}" bash "$_WS_DEPLOY_SH"
+    else
+      printf '\n  websockets-quickorder/scripts/deploy.sh not found — skipping.\n'
+    fi
+  fi
+}
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+_prompt_menu
+case "${DEPLOY_TARGET:-2}" in
+  1)
+    _deploy_local
+    ;;
+  2|"")
+    _check_credentials
+    _provision_infra
+    [[ "$_PROVISION_RDS" -eq 0 ]] && exit 0
+    _wait_for_image
+    _deploy_apprunner
+    ;;
+  *)
+    printf 'Invalid choice.\n'; exit 1
+    ;;
+esac
