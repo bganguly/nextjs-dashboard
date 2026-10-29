@@ -481,19 +481,26 @@ export default function Chart({
   // ranked by revenue desc. "Others" participates in this sort, so the largest
   // segment — whatever it is — leads the order.
   const seriesRanked = useMemo(() => {
+    const total = apiTotal ?? summedCategoryOrders;
     const topSet = new Set(topCategories);
-    const entries = topCategories.map((cat) => ({
+    const rawEntries = topCategories.map((cat) => ({
       key: cat,
-      orders: categoryTotals.find((c) => c.category === cat)?.orders ?? 0,
+      raw: categoryTotals.find((c) => c.category === cat)?.orders ?? 0,
+    }));
+    const othersRaw = categoryTotals
+      .filter((c) => !topSet.has(c.category))
+      .reduce((s, c) => s + c.orders, 0);
+    const rawTotal = rawEntries.reduce((s, e) => s + e.raw, 0) + othersRaw;
+    const entries = rawEntries.map((e) => ({
+      key: e.key,
+      orders: rawTotal > 0 ? Math.round(total * e.raw / rawTotal) : 0,
     }));
     if (withOther) {
-      const othersOrders = categoryTotals
-        .filter((c) => !topSet.has(c.category))
-        .reduce((sum, c) => sum + c.orders, 0);
-      entries.push({ key: OTHER_KEY, orders: othersOrders });
+      const topSum = entries.reduce((s, e) => s + e.orders, 0);
+      entries.push({ key: OTHER_KEY, orders: Math.max(0, total - topSum) });
     }
     return entries.sort((a, b) => b.orders - a.orders);
-  }, [categoryTotals, topCategories, withOther]);
+  }, [categoryTotals, topCategories, withOther, apiTotal, summedCategoryOrders]);
 
   // Stack/legend order: ranked top categories plus "Others". Recharts draws
   // the first <Bar> at the BOTTOM, so largest-first puts the largest at the
